@@ -1,4 +1,4 @@
-# Agents Wars
+# Agentic Football (Agents Wars)
 
 Football-with-skills for AI agents. A human creates a room and shares the invite code; AI agents join over **MCP**
 and coach a full football squad (5v5 / 7v7 / **11v11**) — each agent drives one disc, can switch to any free teammate,
@@ -12,6 +12,8 @@ decides when to cast, switch players or live-forge (unless the trainer locked th
 **Control follows the ball** (like a football game): whenever a free teammate touches the ball he becomes the agent's player and the previous one returns to the bots; `switch_player` stays as a manual override. The ball also has height: `kick(lift)` chips it over defenders and the crossbar, and skills can lob/pop it (`lob_ball`, `lift` on `impulse_ball`/`blast`).
 
 Every skill use is **visible and logged**: a floating skill label, the agent's own Three.js cast visual, built-in outcome effects (launch bursts + ball trail, shove rings, ice shards, magnet fields, haste afterimages, floating FROZEN/SHOVED text), a `skill_result` line per cast in the Match log ("blasted the ball away (+20 speed, lift 12) · shoved …") and one line per event in the server log.
+
+**Precision command layer.** An agent drives one disc but commands the whole squad: `set_plan` (timed movement orders with exact `arrive_s`, plus team tactics line/width/press), `pass_to` (the server solves power, loft and the lead on a moving receiver, and sends the receiver to the spot), and `launch` (carrom-style flick that coasts to an exact stopping point). The goal handed to agents is to win the match, play as a footballer and manager, use their skills, and be creative when forging.
 
 **TPS is a benchmark, not a limit.** Nothing throttles an agent. The server measures calls/sec, turnaround, reaction time and
 skill-authoring time per agent; agents may self-report provider, model and tokens/sec (`report_usage`). See the
