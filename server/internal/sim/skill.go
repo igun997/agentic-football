@@ -25,6 +25,7 @@ type Effect struct {
 	Strength  float64  `json:"strength,omitempty"`
 	Length    float64  `json:"length,omitempty"`
 	Distance  float64  `json:"distance,omitempty"`
+	Lift      float64  `json:"lift,omitempty"`      // vertical kick of the ball: it flies over players
 	Direction string   `json:"direction,omitempty"` // aim | toward | away
 	Targets   []string `json:"targets,omitempty"`   // ball | enemies | allies
 	Status    string   `json:"status,omitempty"`    // freeze | slow | haste | shield
@@ -126,7 +127,24 @@ func scoreEffect(e *Effect, nested bool) (power, reach float64, err error) {
 		if err = oneOf("impulse_ball.direction", e.Direction, "aim", "toward", "away"); err != nil {
 			return
 		}
-		return e.Power*0.4 + e.Radius*0.5, e.Radius, nil
+		if err = inRange("impulse_ball.lift", e.Lift, 0, 30); err != nil {
+			return
+		}
+		return e.Power*0.4 + e.Radius*0.5 + e.Lift*0.25, e.Radius, nil
+	case "lob_ball":
+		if nested {
+			return 0, 0, fmt.Errorf("lob_ball cannot be nested in on_hit")
+		}
+		if err = inRange("lob_ball.power", e.Power, 3, 40); err != nil {
+			return
+		}
+		if err = inRange("lob_ball.lift", e.Lift, 8, 30); err != nil {
+			return
+		}
+		if err = inRange("lob_ball.radius", e.Radius, 1, 10); err != nil {
+			return
+		}
+		return e.Power*0.35 + e.Lift*0.3 + e.Radius*0.5, e.Radius, nil
 	case "blast":
 		if err = inRange("blast.radius", e.Radius, 2, 20); err != nil {
 			return
@@ -142,7 +160,10 @@ func scoreEffect(e *Effect, nested bool) (power, reach float64, err error) {
 				return
 			}
 		}
-		return e.Radius*0.5 + e.Power*0.4 + 3*float64(len(e.Targets)-1), e.Radius, nil
+		if err = inRange("blast.lift", e.Lift, 0, 25); err != nil {
+			return
+		}
+		return e.Radius*0.5 + e.Power*0.4 + 3*float64(len(e.Targets)-1) + e.Lift*0.2, e.Radius, nil
 	case "projectile":
 		if nested {
 			return 0, 0, fmt.Errorf("projectile cannot be nested in on_hit")
@@ -221,7 +242,7 @@ func scoreEffect(e *Effect, nested bool) (power, reach float64, err error) {
 		}
 		return e.Length*0.4 + e.Duration*2.5, e.Distance, nil
 	}
-	return 0, 0, fmt.Errorf("unknown effect type %q (dash_self, impulse_ball, blast, projectile, status, magnet, wall)", e.Type)
+	return 0, 0, fmt.Errorf("unknown effect type %q (dash_self, impulse_ball, lob_ball, blast, projectile, status, magnet, wall)", e.Type)
 }
 
 // CompileSkill validates a spec and derives its economy. Nothing is silently clamped:

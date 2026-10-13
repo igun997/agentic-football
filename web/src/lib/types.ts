@@ -49,7 +49,7 @@ export interface Snapshot {
   phase: 'lobby' | 'countdown' | 'playing' | 'goal' | 'finished'
   phase_left: number; time_left: number
   score: [number, number]; winner: number
-  ball_pos: Vec; ball_vel: Vec
+  ball_pos: Vec; ball_vel: Vec; ball_h?: number
   restart?: { kind: string; team: number; spot: Vec }
   players: PlayerView[]
   agents: AgentView[]

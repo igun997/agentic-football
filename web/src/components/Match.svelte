@@ -12,7 +12,9 @@
   let overlay: HTMLDivElement
   let info = $state<RoomInfo | null>(null)
   let snap = $state<Snapshot | null>(null)
-  let feed = $state<{ id: number; text: string; kind: string }[]>([])
+  let feed = $state<{ id: number; text: string; kind: string; t?: string }[]>([])
+  let showLog = $state(false)
+  let logBox: HTMLDivElement | undefined = $state()
   let banner = $state('')
   let error = $state('')
   let copied = $state(false)
@@ -22,6 +24,8 @@
   let seq = 0
   let bannerTimer: ReturnType<typeof setTimeout>
 
+  const clockOf = (left: number) => { const el = Math.max(0, Math.round((snap?.time_left ?? left) )); return `${Math.floor(el / 60)}:${String(el % 60).padStart(2, '0')}` }
+  $effect(() => { feed.length; if (showLog && logBox) logBox.scrollTop = logBox.scrollHeight })
   const mcpUrl = `${location.origin}/mcp`
   const nameOf = (id: string) => snap?.agents.find((a) => a.id === id)?.name ?? info?.seats.find((s) => s.agent_id === id)?.name ?? id
   const bodyLabel = (id?: string) => { const p = snap?.players.find((x) => x.id === id); return p ? `#${p.num} ${p.role}` : '' }
@@ -46,7 +50,9 @@
       case 'skill_forged': return { text: `${nameOf(d.player)} forged “${d.name}” for slot ${d.slot + 1} (power ${d.power})`, kind: 'forge' }
       case 'ready': return { text: `${nameOf(d.player)} is ready`, kind: 'info' }
       case 'brief_updated': return { text: `Trainer updated ${nameOf(d.player)}'s setup`, kind: 'info' }
-      case 'skill_cast': return { text: `${nameOf(d.player)} cast ${d.name}`, kind: 'cast' }
+      case 'skill_cast': return { text: `⚡ ${nameOf(d.player)} used ${d.name}`, kind: 'cast' }
+      case 'skill_result': return { text: `↳ ${d.name}: ${(d.notes as string[]).length ? (d.notes as string[]).join(' · ') : 'no effect'}`, kind: 'result' }
+      case 'projectile_hit': return d.victim ? { text: `↳ projectile hit ${d.victim}`, kind: 'result' } : null
       case 'status': return { text: `${nameOf(d.player)} is ${d.status}`, kind: 'status' }
       case 'strike': return { text: `YELLOW CARD ${nameOf(d.player)}: ${d.reason}`, kind: 'strike' }
       case 'shield_block': return { text: `${nameOf(d.player)}'s shield blocked ${nameOf(d.from)}`, kind: 'status' }
@@ -78,7 +84,7 @@
         let refetch = false
         for (const e of s.events ?? []) {
           const d = describe(e)
-          if (d) feed = [...feed.slice(-40), { id: seq++, ...d }]
+          if (d) feed = [...feed.slice(-400), { id: seq++, ...d, t: clockOf(s.time_left) }]
           if (['join', 'ready', 'skill_forged', 'brief_updated'].includes(e.type)) refetch = true
           if (e.type === 'goal') flash('GOAL!', 2400)
           if (e.type === 'restart') flash(RESTART[e.data?.kind] ?? '', e.data?.kind === 'kickoff' ? 1200 : 1400)
@@ -152,6 +158,10 @@
     {#each feed.slice(-7) as f (f.id)}<li class={f.kind}>{f.text}</li>{/each}
   </ul>
 
+  <button class="logbtn display" onclick={() => (showLog = !showLog)}>{showLog ? 'Hide' : 'Match'} log</button>
+  {#if showLog}<div class="logpanel" bind:this={logBox}>
+    {#each feed as f (f.id)}<div class={f.kind}><time>{f.t ?? ''}</time>{f.text}</div>{/each}
+  </div>{/if}
   <button class="benchbtn display" onclick={() => (showBench = !showBench)}>{showBench ? 'Hide' : 'Provider'} benchmark</button>
   {#if showBench && snap}<div class="benchpanel"><BenchTable agents={snap.agents} compact /></div>{/if}
 
@@ -236,6 +246,11 @@
   .lobby { position: absolute; left: 14px; right: 14px; top: 84px; bottom: 14px; display: flex; gap: 18px; justify-content: space-between; align-items: flex-start; pointer-events: none; }
   .lobby > :global(*) { pointer-events: auto; }
   .invite { max-width: min(430px, 92vw); }
+  .logbtn { position: absolute; right: 190px; bottom: 14px; background: var(--panel); color: var(--dim); border: 1px solid var(--line); padding: 7px 12px; font-size: 11px; }
+  .logpanel { position: absolute; left: 14px; bottom: 54px; width: min(560px, 92vw); max-height: 46vh; overflow: auto; background: #0b1222f2; border: 1px solid var(--line); padding: 8px 10px; display: grid; gap: 2px; font-size: 12px; }
+  .logpanel div { padding: 2px 6px; border-left: 2px solid var(--line); } .logpanel time { color: var(--dim); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .logpanel .cast { border-color: var(--t0); } .logpanel .result { border-color: #c06bff; color: #d9b8ff; padding-left: 22px; } .logpanel .goal { border-color: var(--gold); color: var(--gold); } .logpanel .strike { border-color: var(--t1); color: var(--t1); }
+  .feed li.result { border-color: #c06bff; color: #d9b8ff; }
   .benchbtn { position: absolute; right: 14px; bottom: 14px; background: var(--panel); color: var(--dim); border: 1px solid var(--line); padding: 7px 12px; font-size: 11px; }
   .benchpanel { position: absolute; right: 14px; bottom: 54px; width: min(640px, 94vw); background: #0b1222f2; border: 1px solid var(--line); padding: 12px; }
   .benchfinal { width: min(620px, 88vw); text-align: left; }

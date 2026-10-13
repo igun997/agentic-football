@@ -13,3 +13,4 @@ button { font: inherit; cursor: pointer; }
   color: var(--text); padding: 2px 8px; background: #0b1222cc; border-bottom: 2px solid var(--team); white-space: nowrap; will-change: transform; }
 .tag .bubble { position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%); background: #fff; color: #0b1222; padding: 4px 9px; border-radius: 10px;
   font: 600 12px ui-sans-serif, system-ui; text-transform: none; letter-spacing: 0; transition: opacity .25s; opacity: 0; max-width: 220px; white-space: normal; width: max-content; }
+.tag .cast { position: absolute; top: 118%; left: 50%; transform: translateX(-50%); background: var(--team); color: #04121a; padding: 2px 8px; font: 800 12px var(--display); letter-spacing: .06em; text-transform: uppercase; opacity: 0; transition: opacity .25s; white-space: nowrap; }

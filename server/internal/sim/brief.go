@@ -39,11 +39,11 @@ var Elements = map[string]string{
 }
 
 var archetypeAllowed = map[string][]string{
-	"attack":   {"impulse_ball", "blast", "projectile", "dash_self"},
+	"attack":   {"impulse_ball", "lob_ball", "blast", "projectile", "dash_self"},
 	"defense":  {"wall", "status", "blast"},
 	"control":  {"status", "magnet", "wall", "projectile"},
 	"mobility": {"dash_self", "status", "impulse_ball"},
-	"trick":    {"dash_self", "impulse_ball", "blast", "projectile", "status", "magnet", "wall"},
+	"trick":    {"dash_self", "impulse_ball", "lob_ball", "blast", "projectile", "status", "magnet", "wall"},
 }
 
 var intensityLimits = map[string]struct{ Ms, Chars int }{

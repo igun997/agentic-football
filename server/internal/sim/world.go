@@ -33,6 +33,12 @@ const (
 	SwitchCost     = 2.0
 	SwitchCool     = 1.5
 	CompilePerCost = 1.0 / 15.0
+
+	Gravity        = 34.0 // ball height physics (units/s^2)
+	BounceE        = 0.55
+	AirReach       = 0.9          // ball lift above which discs can no longer touch it
+	CrossbarY      = 2.0          // ball lift above which a shot flies over the bar
+	WallH          = 3.0          // skill walls are this tall
 	AutopilotAfter = 8 * TickRate // ticks without a command before the bot AI covers for an idle agent
 )
 
@@ -106,6 +112,7 @@ type Agent struct {
 	RecoilLeft  float64
 	SwitchCD    float64
 	LastCmdTick int
+	autoLock    int // tick until which ball contact cannot pull control away again
 	Brief       *Brief
 	Ready       bool
 
@@ -119,6 +126,8 @@ type Agent struct {
 type Ball struct {
 	Pos Vec
 	Vel Vec
+	Y   float64 // lift of the ball above the ground (0 = rolling)
+	VY  float64
 }
 
 type Projectile struct {
@@ -131,6 +140,8 @@ type Projectile struct {
 	Life    float64
 	OnHit   []Effect
 	SkillID string
+	AgentID string
+	Name    string
 }
 
 type Magnet struct {
@@ -174,16 +185,20 @@ type World struct {
 
 	PerTeam       int
 	Autopilot     bool // bots cover for agents that stopped commanding
+	AutoControl   bool // football-game control: the free teammate who touches the ball becomes the agent's player
 	LastTouchTeam int
 	kickoffTeam   int
 	nextID        int
+	notes         []string // what the skill being cast actually did (for the match log)
+	castAgent     *Agent
+	castSkill     *Skill
 	rng           *rand.Rand
 }
 
 // NewWorld creates the match with full squads of perTeam players each (bots until agents join).
 func NewWorld(durationSecs float64, perTeam int) *World {
 	w := &World{Phase: PhaseLobby, Duration: durationSecs, TimeLeft: durationSecs, Winner: -1,
-		PerTeam: perTeam, Autopilot: true, LastTouchTeam: -1, rng: rand.New(rand.NewSource(7))}
+		PerTeam: perTeam, Autopilot: true, AutoControl: true, LastTouchTeam: -1, rng: rand.New(rand.NewSource(7))}
 	for team := 0; team < 2; team++ {
 		for i, slot := range formation(perTeam) {
 			home := slot.pos
@@ -225,6 +240,23 @@ func formation(n int) []slot {
 		out = append(out, slot{RoleFWD, Vec{-22, float64(i) * 8}})
 	}
 	return out
+}
+
+// note records one outcome of the skill currently being cast; UseSkill publishes them as skill_result.
+func (w *World) note(format string, a ...any) { w.notes = append(w.notes, fmt.Sprintf(format, a...)) }
+
+func liftNote(l float64) string {
+	if l <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(", lift %.0f", l)
+}
+
+func who(p *Player) string {
+	if p.Agent != nil {
+		return fmt.Sprintf("%s's #%d %s", p.Agent.Name, p.Num, p.Role)
+	}
+	return fmt.Sprintf("t%d #%d %s", p.Team, p.Num, p.Role)
 }
 
 func (w *World) emit(t string, data map[string]any) {
@@ -302,7 +334,7 @@ func (w *World) setRestart(kind string, team int, spot Vec) {
 		keep = 9.5
 	}
 	w.Restart = &Restart{Kind: kind, Team: team, Spot: spot, Wait: RestartWait, Keepout: keep}
-	w.Ball.Pos, w.Ball.Vel = spot, Vec{}
+	w.Ball = Ball{Pos: spot}
 	w.LastTouchTeam = -1
 	w.emit("restart", map[string]any{"kind": kind, "team": team, "spot": spot})
 }
@@ -342,11 +374,13 @@ func (w *World) SetMove(a *Agent, dir Vec) *GameError {
 func (w *World) touch(team int) { w.LastTouchTeam = team }
 
 func (w *World) inReach(p *Player) bool {
-	return w.Ball.Pos.Sub(p.Pos).Len() <= PlayerRadius+BallRadius+KickReach
+	return w.Ball.Y < 1.2 && w.Ball.Pos.Sub(p.Pos).Len() <= PlayerRadius+BallRadius+KickReach
 }
 
-func (w *World) strike(p *Player, d Vec, power float64) {
-	w.Ball.Vel = d.Scale(12 + 38*power).Add(p.Vel.Scale(0.3))
+func (w *World) strike(p *Player, d Vec, power, lift float64) {
+	lift = clamp(lift, 0, 1)
+	w.Ball.Vel = d.Scale((12 + 38*power) * (1 - 0.3*lift)).Add(p.Vel.Scale(0.3))
+	w.Ball.VY = lift * 26 // a lofted kick sends the ball over the players
 	w.touch(p.Team)
 	if w.Restart != nil && w.Restart.Team == p.Team {
 		w.Restart = nil // set piece taken
@@ -354,7 +388,7 @@ func (w *World) strike(p *Player, d Vec, power float64) {
 	w.emit("kick", map[string]any{"player": p.ID, "power": power})
 }
 
-func (w *World) Kick(a *Agent, dir Vec, power float64) (bool, *GameError) {
+func (w *World) Kick(a *Agent, dir Vec, power, lift float64) (bool, *GameError) {
 	if e := w.controllable(a); e != nil {
 		return false, e
 	}
@@ -377,7 +411,7 @@ func (w *World) Kick(a *Agent, dir Vec, power float64) (bool, *GameError) {
 	if w.Restart != nil && w.Restart.Team != p.Team {
 		return false, nil // opponents may not touch a set piece
 	}
-	w.strike(p, d, power)
+	w.strike(p, d, power, lift)
 	return true, nil
 }
 
@@ -400,6 +434,39 @@ func (w *World) Dash(a *Agent, dir Vec) *GameError {
 	p.DashCD = DashCooldown
 	w.emit("dash", map[string]any{"player": p.ID})
 	return nil
+}
+
+// autoControl implements the football-game rule: whoever gets the ball becomes the agent's player.
+// When a free teammate touches the ball, an agent of that team whose own player is not on the ball
+// takes him over; the player it leaves reverts to the bot AI.
+func (w *World) autoControl(p *Player) {
+	if !w.AutoControl || p.Agent != nil {
+		return
+	}
+	contact := func(b *Player) bool { return b != nil && b.Pos.Sub(w.Ball.Pos).Len() <= PlayerRadius+BallRadius+0.4 }
+	var best *Agent
+	bestD := math.MaxFloat64
+	for _, ag := range w.Agents {
+		if ag.Team != p.Team || w.Tick < ag.autoLock || contact(ag.Body) {
+			continue // that agent is on the ball already (or just switched)
+		}
+		d := 0.0
+		if ag.Body != nil {
+			d = ag.Body.Pos.Sub(w.Ball.Pos).Len()
+		}
+		if d < bestD {
+			best, bestD = ag, d
+		}
+	}
+	if best == nil {
+		return
+	}
+	if old := best.Body; old != nil {
+		old.Agent, old.Move = nil, Vec{}
+	}
+	p.Agent, best.Body = best, p
+	best.autoLock = w.Tick + int(0.5*TickRate)
+	w.emit("switch", map[string]any{"agent": best.ID, "player": p.ID, "role": string(p.Role), "num": p.Num, "reason": "touch"})
 }
 
 // SwitchPlayer hands the agent another teammate (like pressing the switch button in a football
@@ -556,9 +623,12 @@ func (w *World) UseSkill(a *Agent, slot int, aim Vec) *GameError {
 		"player": a.ID, "body": p.ID, "skill": sk.ID, "name": sk.Spec.Name,
 		"origin": p.Pos, "aim": dir, "reach": sk.Reach, "duration_ms": sk.Spec.Visual.DurationMs,
 	})
+	w.notes, w.castAgent, w.castSkill = nil, a, sk
 	for i := range sk.Spec.Effects {
 		w.applyEffect(p, &sk.Spec.Effects[i], p.Pos, dir, sk.ID)
 	}
+	w.emit("skill_result", map[string]any{"player": a.ID, "skill": sk.ID, "name": sk.Spec.Name, "notes": append([]string{}, w.notes...)})
+	w.notes, w.castAgent, w.castSkill = nil, nil, nil
 	return nil
 }
 
@@ -575,7 +645,11 @@ func (w *World) enemiesIn(p *Player, center Vec, radius float64) []*Player {
 func (w *World) applyStatus(target *Player, caster *Player, status string, dur float64) {
 	if target != caster && target.Shield > 0 && status != "shield" && status != "haste" {
 		w.emit("shield_block", map[string]any{"player": target.ID, "from": caster.ID})
+		w.note("%s blocked it with a shield", who(target))
 		return
+	}
+	if target != caster {
+		w.note("%s %s", map[string]string{"freeze": "froze", "slow": "slowed", "haste": "hasted", "shield": "shielded"}[status], who(target))
 	}
 	switch status {
 	case "freeze":
@@ -602,7 +676,9 @@ func (w *World) blast(p *Player, e *Effect, center Vec) {
 					dir = p.Face
 				}
 				w.Ball.Vel = w.Ball.Vel.Add(dir.Scale(e.Power))
+				w.Ball.VY += e.Lift
 				w.touch(p.Team)
+				w.note("blasted the ball away (+%.0f speed%s)", e.Power, liftNote(e.Lift))
 			}
 		case "enemies", "allies":
 			for _, o := range w.Players {
@@ -616,6 +692,7 @@ func (w *World) blast(p *Player, e *Effect, center Vec) {
 						continue
 					}
 					o.Vel = o.Vel.Add(d.Norm().Scale(e.Power))
+					w.note("shoved %s", who(o))
 				}
 			}
 		}
@@ -630,6 +707,7 @@ func (w *World) applyEffect(p *Player, e *Effect, origin, aim Vec, skillID strin
 			d = aim.Scale(-1)
 		}
 		p.Vel = p.Vel.Add(d.Scale(e.Power))
+		w.note("dashed (+%.0f speed)", e.Power)
 	case "impulse_ball":
 		if w.Ball.Pos.Sub(p.Pos).Len() <= e.Radius+PlayerRadius+BallRadius {
 			d := aim
@@ -640,7 +718,20 @@ func (w *World) applyEffect(p *Player, e *Effect, origin, aim Vec, skillID strin
 				d = w.Ball.Pos.Sub(p.Pos).Norm()
 			}
 			w.Ball.Vel = d.Scale(e.Power)
+			w.Ball.VY = e.Lift
 			w.touch(p.Team)
+			w.note("launched the ball (%.0f speed%s)", e.Power, liftNote(e.Lift))
+		} else {
+			w.note("ball was out of reach")
+		}
+	case "lob_ball":
+		if w.Ball.Pos.Sub(p.Pos).Len() <= e.Radius+PlayerRadius+BallRadius {
+			w.Ball.Vel = aim.Scale(e.Power)
+			w.Ball.VY = e.Lift
+			w.touch(p.Team)
+			w.note("lobbed the ball (%.0f speed, lift %.0f)", e.Power, e.Lift)
+		} else {
+			w.note("ball was out of reach for the lob")
 		}
 	case "blast":
 		w.blast(p, e, origin)
@@ -650,7 +741,9 @@ func (w *World) applyEffect(p *Player, e *Effect, origin, aim Vec, skillID strin
 			ID: w.nextID, Owner: p.ID, Team: p.Team,
 			Pos: p.Pos.Add(aim.Scale(PlayerRadius + e.Radius + 0.2)), Vel: aim.Scale(e.Speed),
 			Radius: e.Radius, Life: e.Lifetime, OnHit: e.OnHit, SkillID: skillID,
+			AgentID: w.castAgent.ID, Name: w.castSkill.Spec.Name,
 		})
+		w.note("fired a projectile (speed %.0f)", e.Speed)
 	case "status":
 		if e.Target == "self" {
 			w.applyStatus(p, p, e.Status, e.Duration)
@@ -661,11 +754,13 @@ func (w *World) applyEffect(p *Player, e *Effect, origin, aim Vec, skillID strin
 		}
 	case "magnet":
 		w.Magnets = append(w.Magnets, &Magnet{Owner: p.ID, Radius: e.Radius, Strength: e.Strength, Left: e.Duration})
+		w.note("magnet pulls the ball for %.1fs", e.Duration)
 	case "wall":
 		c := p.Pos.Add(aim.Scale(e.Distance))
 		perp := Vec{-aim.Z, aim.X}.Scale(e.Length / 2)
 		w.nextID++
 		w.Walls = append(w.Walls, &Wall{ID: w.nextID, A: c.Sub(perp), B: c.Add(perp), Left: e.Duration})
+		w.note("raised a wall for %.1fs", e.Duration)
 	}
 }
 

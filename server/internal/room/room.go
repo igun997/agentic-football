@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ type Config struct {
 	AgentsPerTeam  int     `json:"agents_per_team"`  // AI agents (coaches) per team, the rest are bots
 	DurationSecs   float64 `json:"duration_secs"`
 	TimeScale      float64 `json:"time_scale"`
+	PrepSecs       int     `json:"prep_secs"` // pre-match window for agents to forge skills
 }
 
 func (c *Config) Normalize() error {
@@ -43,6 +45,9 @@ func (c *Config) Normalize() error {
 	if c.TimeScale == 0 {
 		c.TimeScale = 0.5
 	}
+	if c.PrepSecs == 0 {
+		c.PrepSecs = 90
+	}
 	switch {
 	case c.PlayersPerTeam != 5 && c.PlayersPerTeam != 7 && c.PlayersPerTeam != 11:
 		return errors.New("players_per_team must be 5, 7 or 11")
@@ -52,6 +57,8 @@ func (c *Config) Normalize() error {
 		return errors.New("duration_secs must be 30..600")
 	case c.TimeScale < 0.25 || c.TimeScale > 1:
 		return errors.New("time_scale must be 0.25..1")
+	case c.PrepSecs < 10 || c.PrepSecs > 900:
+		return errors.New("prep_secs must be 10..900")
 	}
 	return nil
 }
@@ -159,8 +166,9 @@ func (r *Room) Join(name, provider, model string) (*Seat, *sim.Brief, error) {
 	if len(r.seats) == 2*r.Cfg.AgentsPerTeam {
 		r.maybeStartLocked()
 		if r.world.Phase == sim.PhaseLobby { // not everyone is ready: start anyway after the prep window
-			r.prepDeadline = time.Now().Add(prepWindow)
-			time.AfterFunc(prepWindow, func() {
+			window := time.Duration(r.Cfg.PrepSecs) * time.Second
+			r.prepDeadline = time.Now().Add(window)
+			time.AfterFunc(window, func() {
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				if r.world.Phase == sim.PhaseLobby {
@@ -171,8 +179,6 @@ func (r *Room) Join(name, provider, model string) (*Seat, *sim.Brief, error) {
 	}
 	return seat, &brief, nil
 }
-
-const prepWindow = 90 * time.Second
 
 func cleanLabel(s string) string {
 	out := make([]rune, 0, 32)
@@ -448,6 +454,7 @@ type Snapshot struct {
 	Winner        int          `json:"winner"`
 	BallPos       sim.Vec      `json:"ball_pos"`
 	BallVel       sim.Vec      `json:"ball_vel"`
+	BallH         float64      `json:"ball_h"` // height of the ball centre above the ground (1 = rolling)
 	Restart       *RestartView `json:"restart,omitempty"`
 	Players       []PlayerView `json:"players"`
 	Agents        []AgentView  `json:"agents"`
@@ -463,7 +470,7 @@ type Snapshot struct {
 func (r *Room) snapshotLocked(w *sim.World, viewer string, withEvents bool) Snapshot {
 	s := Snapshot{
 		Room: r.Code, Tick: w.Tick, Phase: w.Phase, PhaseLeft: w.PhaseLeft, TimeLeft: w.TimeLeft,
-		Score: w.Score, Winner: w.Winner, BallPos: w.Ball.Pos, BallVel: w.Ball.Vel,
+		Score: w.Score, Winner: w.Winner, BallPos: w.Ball.Pos, BallVel: w.Ball.Vel, BallH: sim.BallRadius + w.Ball.Y,
 		SkillsVersion: r.skillsVersion, You: viewer,
 		Players: []PlayerView{}, Agents: []AgentView{}, Projectiles: []ProjView{}, Walls: []WallView{},
 	}
@@ -534,6 +541,7 @@ func (r *Room) Observe(agentID string) Snapshot {
 func (r *Room) broadcastLocked() {
 	events := r.world.DrainEvents()
 	for _, e := range events {
+		r.logEvent(e)
 		if e.Type == "skill_created" || e.Type == "skill_forged" {
 			r.skillsVersion++
 		}
@@ -631,4 +639,14 @@ func (r *Room) idleFor() time.Duration {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return time.Since(r.lastActive)
+}
+
+// logEvent writes the notable match events to the server log (one line each).
+func (r *Room) logEvent(e sim.Event) {
+	switch e.Type {
+	case "join", "ready", "brief_updated", "skill_forged", "skill_created", "skill_cast", "skill_result", "projectile_hit",
+		"status", "switch", "goal", "restart", "strike", "final", "shield_block":
+		d, _ := json.Marshal(e.Data)
+		log.Printf("[%s t=%d] %s %s", r.Code, e.Tick, e.Type, d)
+	}
 }

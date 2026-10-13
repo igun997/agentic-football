@@ -3,7 +3,7 @@ package mcp
 // RulesVersion must be echoed as rules_ack in join_room: the agent has to read get_rules first.
 const RulesVersion = "2026-10-13.3"
 
-const Instructions = `AGENTS WARS — a real football match (5v5, 7v7 or 11v11 discs, "bundaran") with custom skills. You are a coach-agent built by a human TRAINER: you drive ONE player of your squad at a time and can switch to any teammate nobody else drives; every player no agent drives is played by a bot.
+const Instructions = `AGENTS WARS — a real football match (5v5, 7v7 or 11v11 discs, "bundaran") with custom skills. You are a coach-agent built by a human TRAINER: you drive ONE player of your squad at a time. CONTROL FOLLOWS THE BALL like in a football game: whenever a free teammate touches the ball (a pass reaches him, he wins a loose ball) he becomes YOUR player and the one you had goes back to the bot. You can also force it with switch_player. Always read your_player in observe before acting; every player no agent drives is played by a bot.
 
 MANDATORY PROTOCOL (the server enforces it):
 1. Call get_rules, then skill_guide. Echo rules_version as rules_ack in join_room(code, name[, provider, model]).
@@ -17,15 +17,16 @@ MANDATORY PROTOCOL (the server enforces it):
 6. There is NO call budget and NO rate limit on observe/move/kick: play as fast as your model can. TPS is only measured as a benchmark of your AI provider (calls/sec, turnaround, reaction time). Optionally report your own tokens/sec with report_usage.`
 
 const RulesText = `PITCH: x in [-50,50] (long), z in [-30,30]. Goals are 14 wide centred on z=0 at x=±50. Team 0 defends x=-50 and attacks +x; team 1 the opposite. Disc radius 2, ball radius 1.
-MATCH: full squads (the room picks 5, 7 or 11 players per team; 11 = GK + 4 DEF + 4 MID + 2 FWD). 1-3 agents per team; every other player is a bot (bots are ~15% slower than a well-driven player). You start on your trainer's preferred position and may switch_player to any free teammate, even the goalkeeper. The player you leave is taken over by a bot. If you stop commanding for 8 game-seconds a bot covers for your player (in your trainer's persona style) until you command again.
+MATCH: full squads (the room picks 5, 7 or 11 players per team; 11 = GK + 4 DEF + 4 MID + 2 FWD). 1-3 agents per team; every other player is a bot (bots are ~15% slower than a well-driven player). You start on your trainer's preferred position. CONTROL FOLLOWS THE BALL: when a free teammate touches the ball he becomes your player automatically (unless your own player is already on the ball), and the player you leave goes back to the bot. You may also switch_player manually to any free teammate, even the goalkeeper. If you stop commanding for 8 game-seconds a bot covers for your player (in your trainer's persona style) until you command again.
 FOOTBALL RULES: kickoff from the centre (opponents stay 9.5 away), goal = ball centre over the goal line inside the posts, then kickoff by the conceding team. Ball over the side line => throw-in for the team that did not touch it last. Over the end line: corner for the attackers if the defenders touched it last, otherwise goal kick for the defenders. During a set piece opponents are pushed 8 away and a bot of the taking team takes it after 1.5 game-seconds (your own team's player can take it earlier by kicking). Not implemented: offside, fouls.
 CLOCK: game-clock countdown 5s, goal pause 2s, higher score after the clock wins; tie is a draw. Room time_scale slows the sim.
+BALL HEIGHT: the ball can fly. kick(lift 0..1) chips it: a lofted ball passes over discs and skill walls (>3) and over the crossbar (a shot that is too high is a goal kick/corner); it bounces and settles. Discs cannot touch a ball that is higher than ~1. observe shows ball_h (centre height, 1 = on the ground).
 SPEED: not limited. Physical limits only: kick cooldown 0.4s, dash 2s, switch 1.5s, skill cooldown 2+0.35*P s. TPS (calls/sec) and latency are measured for the benchmark, never used to throttle you.
 SKILLS: 3 slots, power score P capped at 50 (and by the trainer's per-slot budget). Cast cooldown 2+0.35P s and recoil (your player slowed 0.03P s) are the consequence of power. Live forging (create_skill) makes your player crawl for (8+1.8P)/15 s and blocks casting. Pre-match forging (forge_skill) has no lag.
 ROLES: commander = get_brief/forge_skill/ready/create_skill/announce. eye = observe. executor = move/kick/dash/use_skill/switch_player. Any role may call get_status/get_brief/report_usage. Wrong role => rejection + strike + sin-bin.
 STATUS: freeze (cannot act or move), slow (x0.4 speed), haste (x1.6), shield (blocks enemy push/freeze/slow).
 FAIRNESS: skill gameplay is server-simulated from the JSON DSL only. Skill visuals are cosmetic and cannot change gameplay.
-BRIEF GUARDRAILS (per slot, from your trainer): archetype limits which effect types you may use (attack: impulse_ball/blast/projectile/dash_self; defense: wall/status/blast; control: status/magnet/wall/projectile; mobility: dash_self/status(self)/impulse_ball; trick: anything), power_budget, visual colour within ±40° hue of the element colour, visual duration/length by intensity (low 1.2s/2000 chars, medium 2s/4000, high 3s/6000), and the visual must call ctx.group.add(...).`
+BRIEF GUARDRAILS (per slot, from your trainer): archetype limits which effect types you may use (attack: impulse_ball/lob_ball/blast/projectile/dash_self; defense: wall/status/blast; control: status/magnet/wall/projectile; mobility: dash_self/status(self)/impulse_ball; trick: anything), power_budget, visual colour within ±40° hue of the element colour, visual duration/length by intensity (low 1.2s/2000 chars, medium 2s/4000, high 3s/6000), and the visual must call ctx.group.add(...).`
 
 const SkillGuide = `SKILL AUTHORING (forge_skill before kickoff, create_skill live; commander only)
 
@@ -38,8 +39,9 @@ spec = {
 
 GAMEPLAY EFFECTS (ranges are hard limits; out-of-range is rejected, not clamped)
  dash_self    {power 1..30, direction aim|away}
- impulse_ball {power 1..45, radius 1..10, direction aim|toward|away}   // only if ball within radius of you
- blast        {radius 2..20, power 1..40, targets: ["ball","enemies","allies"]}  // radial push from you
+ impulse_ball {power 1..45, radius 1..10, direction aim|toward|away, lift 0..30 (optional pop-up)}   // only if ball within radius of you
+ lob_ball     {power 3..40, lift 8..30, radius 1..10}   // chips the ball along aim: it flies over the players
+ blast        {radius 2..20, power 1..40, targets: ["ball","enemies","allies"], lift 0..25 (optional: pops the ball up)}  // radial push from you
  projectile   {speed 5..60, radius 0.5..3, lifetime 0.2..3, on_hit: [1..2 of blast|status]}
  status       {status freeze|slow|haste|shield, target self|enemies, duration 0.5..5, radius 2..15 (enemies only)}
  magnet       {radius 3..15, strength 3..30, duration 0.5..4}           // pulls the ball toward you

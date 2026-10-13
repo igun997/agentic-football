@@ -14,6 +14,8 @@ interface PlayerObj {
   yaw: number
   label: HTMLDivElement
   nm: HTMLSpanElement
+  castEl: HTMLDivElement
+  castTimer?: ReturnType<typeof setTimeout>
   bubble: HTMLDivElement
   ice: THREE.Mesh
   shield: THREE.Mesh
@@ -38,6 +40,7 @@ export class Arena {
   private skills = new Map<string, SkillInfo>()
   private ball = new THREE.Group()
   private ballTarget = new THREE.Vector3(0, 1, 0)
+  private shadow = new THREE.Mesh(new THREE.CircleGeometry(1, 20), new THREE.MeshBasicMaterial({ color: '#000000', transparent: true, opacity: 0.35, depthWrite: false }))
   private templates: { player: THREE.Object3D | null; ball: THREE.Object3D | null } = { player: null, ball: null }
   private pendingSnap: Snapshot | null = null
   private shake = 0
@@ -72,6 +75,9 @@ export class Arena {
 
     this.ball.position.copy(this.ballTarget)
     this.scene.add(this.ball)
+    this.shadow.rotation.x = -Math.PI / 2
+    this.shadow.position.y = 0.04
+    this.scene.add(this.shadow)
 
     this.ro = new ResizeObserver(() => this.resize())
     this.ro.observe(canvas.parentElement ?? canvas)
@@ -157,11 +163,13 @@ export class Arena {
     label.style.setProperty('--team', TEAM_COLORS[team])
     label.style.display = 'none'
     const nm = document.createElement('span')
+    const castEl = document.createElement('div')
+    castEl.className = 'cast'
     const bubble = document.createElement('div')
     bubble.className = 'bubble'
-    label.append(nm, bubble)
+    label.append(nm, bubble, castEl)
     this.overlay.appendChild(label)
-    return { root, body, target: new THREE.Vector3(), yaw: 0, label, nm, bubble, ice, shield, compile, ring, team, controlled: false }
+    return { root, body, target: new THREE.Vector3(), yaw: 0, label, nm, castEl, bubble, ice, shield, compile, ring, team, controlled: false }
   }
 
   private dropPlayer(id: string, p: PlayerObj) {
@@ -204,7 +212,7 @@ export class Arena {
       }
       o.label.style.display = ag ? 'block' : 'none'
     }
-    this.ballTarget.set(s.ball_pos.x, 1, s.ball_pos.z)
+    this.ballTarget.set(s.ball_pos.x, s.ball_h ?? 1, s.ball_pos.z)
 
     const pset = new Set<number>()
     for (const pr of s.projectiles) {
@@ -241,6 +249,12 @@ export class Arena {
     if (e.type === 'skill_cast') {
       const sk = this.skills.get(d.skill)
       const owner = this.players.get(d.body)
+      if (owner) {
+        owner.castEl.textContent = `⚡ ${d.name}`
+        owner.castEl.style.opacity = '1'
+        clearTimeout(owner.castTimer)
+        owner.castTimer = setTimeout(() => (owner.castEl.style.opacity = '0'), 1800)
+      }
       const color = sk?.spec.visual.color || TEAM_COLORS[owner?.team ?? 0]
       this.effects.spawn(sk?.spec.visual.code ?? null, {
         origin: d.origin, aim: d.aim, reach: d.reach || 6, color, duration: (d.duration_ms || 800) / 1000,
@@ -303,6 +317,11 @@ export class Arena {
       this.ball.rotateOnWorldAxis(axis, mv.length())
     }
 
+    const h = Math.max(0, this.ball.position.y - 1)
+    this.shadow.position.x = this.ball.position.x
+    this.shadow.position.z = this.ball.position.z
+    this.shadow.scale.setScalar(1.1 / (1 + h * 0.12))
+    ;(this.shadow.material as THREE.MeshBasicMaterial).opacity = 0.38 / (1 + h * 0.15)
     this.effects.update(dt)
     this.controls.update()
     if (this.shake > 0) {

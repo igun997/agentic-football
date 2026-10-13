@@ -111,7 +111,7 @@ func (w *World) thinkKeeper(p *Player) {
 	if distToGoal < 13 && math.Abs(ball.Z) < 16 && w.Restart == nil {
 		if w.inReach(p) {
 			// clear it upfield and wide
-			w.botKick(p, Vec{attackDir(p.Team) * 20, sign(ball.Z) * 14}.Norm(), 0.9)
+			w.botKick(p, Vec{attackDir(p.Team) * 20, sign(ball.Z) * 14}.Norm(), 0.9, 0.5)
 			return
 		}
 		w.moveTo(p, ball)
@@ -121,9 +121,14 @@ func (w *World) thinkKeeper(p *Player) {
 	w.moveTo(p, t)
 }
 
-func (w *World) botKick(p *Player, d Vec, power float64) {
+func (w *World) botKick(p *Player, d Vec, power, lift float64) {
 	if p.KickCD > 0 || !w.inReach(p) {
 		return
+	}
+	if p.Agent == nil && w.AutoControl { // the ball reached a free player: an agent takes him over instead of the bot acting
+		if w.autoControl(p); p.Agent != nil {
+			return
+		}
 	}
 	jitter := (w.rng.Float64() - 0.5) * 0.16
 	c, s := math.Cos(jitter), math.Sin(jitter)
@@ -131,7 +136,7 @@ func (w *World) botKick(p *Player, d Vec, power float64) {
 	p.KickCD = KickCooldown
 	p.botRest = 0.9
 	p.Face = d
-	w.strike(p, d, power)
+	w.strike(p, d, power, lift)
 }
 
 // blocked reports whether an opponent stands on the ball's path d (unit) over the next `length` units.
@@ -175,21 +180,25 @@ func (w *World) thinkChaser(p *Player) {
 				}
 			}
 			tz := -sign(keeperZ+0.01) * 4.5
-			w.botKick(p, Vec{goal.X, tz}.Sub(ball).Norm(), 1)
+			w.botKick(p, Vec{goal.X, tz}.Sub(ball).Norm(), 1, 0)
 			return
 		}
 		if mate := w.bestPassTarget(p, ball, false); mate != nil {
 			d := mate.Pos.Sub(ball)
 			if dir, ok := w.clearLane(p.Team, ball, d.Norm(), d.Len()); ok {
-				w.botKick(p, dir, clamp((d.Len()*0.8-6)/38, 0.2, 0.95))
+				w.botKick(p, dir, clamp((d.Len()*0.8-6)/38, 0.2, 0.95), 0)
+				return
+			}
+			if d := mate.Pos.Sub(ball); d.Len() > 12 { // lane blocked: chip it over the defenders
+				w.botKick(p, d.Norm(), clamp((d.Len()*0.7-6)/38, 0.3, 0.9), 0.75)
 				return
 			}
 		}
 		// carry it: knock it ahead into free space, hard enough to get away from markers
 		if dir, ok := w.clearLane(p.Team, ball, u, 16); ok {
-			w.botKick(p, dir, 0.2)
+			w.botKick(p, dir, 0.2, 0)
 		} else {
-			w.botKick(p, dir, 0.7) // boxed in: play it out wide
+			w.botKick(p, dir, 0.7, 0.5) // boxed in: lift it out
 		}
 		return
 	}

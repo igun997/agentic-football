@@ -351,11 +351,11 @@ func (s *Server) register() {
 					return nil, asErr(w.SetMove(a, sim.Vec{X: c.num("dir_x"), Z: c.num("dir_z")}))
 				})
 			}},
-		{Name: "kick", Role: room.RoleExecutor, Description: "Kick the ball along a direction. Only lands when the ball is touching/near your player. 0.4s cooldown.",
-			Schema: schema([]string{"token", "dir_x", "dir_z", "power"}, map[string]any{"token": tokenProp, "dir_x": numProp("direction x"), "dir_z": numProp("direction z"), "power": numProp("0..1")}),
+		{Name: "kick", Role: room.RoleExecutor, Description: "Kick the ball along a direction. Only lands when the ball is touching/near your player and not in the air. lift>0 chips it over defenders (it also flies over the crossbar if too high). 0.4s cooldown.",
+			Schema: schema([]string{"token", "dir_x", "dir_z", "power"}, map[string]any{"token": tokenProp, "dir_x": numProp("direction x"), "dir_z": numProp("direction z"), "power": numProp("0..1"), "lift": numProp("0..1 optional: lofts the ball over players (chip/lob); 0 = ground pass")}),
 			Run: func(c *call) (any, error) {
 				return c.act(func(w *sim.World, a *sim.Agent) (any, error) {
-					hit, e := w.Kick(a, sim.Vec{X: c.num("dir_x"), Z: c.num("dir_z")}, c.num("power"))
+					hit, e := w.Kick(a, sim.Vec{X: c.num("dir_x"), Z: c.num("dir_z")}, c.num("power"), c.num("lift"))
 					return map[string]any{"ball_hit": hit}, asErr(e)
 				})
 			}},

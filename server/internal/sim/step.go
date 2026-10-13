@@ -159,7 +159,12 @@ func (w *World) updateProjectiles() {
 			continue
 		}
 		if pr.Life > 0 { // real impact, not mere expiry
-			w.emit("projectile_hit", map[string]any{"skill": pr.SkillID, "pos": pr.Pos})
+			hit := map[string]any{"skill": pr.SkillID, "pos": pr.Pos, "owner": pr.Owner}
+			if victim != nil {
+				hit["victim"] = who(victim)
+			}
+			w.emit("projectile_hit", hit)
+			w.notes = nil
 			if caster := w.PlayerByID(pr.Owner); caster != nil {
 				for i := range pr.OnHit {
 					e := pr.OnHit[i]
@@ -180,10 +185,18 @@ func (w *World) updateProjectiles() {
 						w.blast(caster, &e, pr.Pos)
 					}
 				}
+				notes := []string{}
+				if victim != nil {
+					notes = append(notes, "hit "+who(victim))
+				} else {
+					notes = append(notes, "hit the ball")
+				}
+				w.emit("skill_result", map[string]any{"player": pr.AgentID, "skill": pr.SkillID, "name": pr.Name, "notes": append(notes, w.notes...)})
 			}
 		}
 	}
 	w.Projs = alive
+	w.notes = nil
 }
 
 type body struct {
@@ -265,7 +278,21 @@ func (w *World) stepBodies(controlled bool) {
 		p.Vel = p.Vel.Add(delta)
 		p.Pos = p.Pos.Add(p.Vel.Scale(Dt))
 	}
-	w.Ball.Vel = w.Ball.Vel.Scale(0.975)
+	drag := 0.975 // rolling friction
+	if w.Ball.Y > 0 || w.Ball.VY != 0 {
+		drag = 0.996 // little drag in the air
+		w.Ball.VY -= Gravity * Dt
+		w.Ball.Y += w.Ball.VY * Dt
+		if w.Ball.Y <= 0 {
+			w.Ball.Y = 0
+			if w.Ball.VY < -4 {
+				w.Ball.VY = -w.Ball.VY * BounceE // bounce
+			} else {
+				w.Ball.VY = 0
+			}
+		}
+	}
+	w.Ball.Vel = w.Ball.Vel.Scale(drag)
 	w.Ball.Pos = w.Ball.Pos.Add(w.Ball.Vel.Scale(Dt))
 
 	n := len(w.Players)
@@ -277,9 +304,13 @@ func (w *World) stepBodies(controlled bool) {
 				collide(body{&a.Pos, &a.Vel, PlayerRadius, w.mass(a)}, body{&b.Pos, &b.Vel, PlayerRadius, w.mass(b)}, 0.5)
 			}
 		}
-		collide(body{&a.Pos, &a.Vel, PlayerRadius, w.mass(a)}, body{&w.Ball.Pos, &w.Ball.Vel, BallRadius, 1}, 0.8)
-		if w.Restart == nil && a.Pos.Sub(w.Ball.Pos).Len() <= PlayerRadius+BallRadius+0.05 {
+		airborne := w.Ball.Y > AirReach // a lofted ball flies over the discs
+		if !airborne {
+			collide(body{&a.Pos, &a.Vel, PlayerRadius, w.mass(a)}, body{&w.Ball.Pos, &w.Ball.Vel, BallRadius, 1}, 0.8)
+		}
+		if !airborne && w.Restart == nil && a.Pos.Sub(w.Ball.Pos).Len() <= PlayerRadius+BallRadius+0.05 {
 			w.touch(a.Team)
+			w.autoControl(a)
 		}
 	}
 	for _, wl := range w.Walls {
@@ -287,7 +318,9 @@ func (w *World) stepBodies(controlled bool) {
 		for _, p := range w.Players {
 			collideWall(&p.Pos, &p.Vel, PlayerRadius, wl, 0.2)
 		}
-		collideWall(&w.Ball.Pos, &w.Ball.Vel, BallRadius, wl, 0.9)
+		if w.Ball.Y < WallH {
+			collideWall(&w.Ball.Pos, &w.Ball.Vel, BallRadius, wl, 0.9)
+		}
 	}
 	alive := w.Walls[:0]
 	for _, wl := range w.Walls {
@@ -324,6 +357,9 @@ func (w *World) ballBounds() {
 	const e = 0.8
 	for _, sx := range []float64{-1, 1} {
 		for _, sz := range []float64{-1, 1} {
+			if b.Y > WallH {
+				continue
+			}
 			post := Vec{sx * FieldHalfX, sz * GoalHalfWidth}
 			collide(body{&post, &Vec{}, PostRadius, 1e9}, body{&b.Pos, &b.Vel, BallRadius, 1}, 0.8)
 		}
@@ -346,8 +382,8 @@ func (w *World) ballBounds() {
 // checkGoal scores when the ball centre crosses a goal line inside the mouth.
 func (w *World) checkGoal() bool {
 	b := w.Ball.Pos
-	if math.Abs(b.Z) >= GoalHalfWidth-0.2 || math.Abs(b.X) <= FieldHalfX {
-		return false
+	if math.Abs(b.Z) >= GoalHalfWidth-0.2 || math.Abs(b.X) <= FieldHalfX || w.Ball.Y > CrossbarY {
+		return false // outside the posts, or over the bar
 	}
 	team := 0 // right goal => team 0 scores
 	if b.X < 0 {
@@ -411,7 +447,7 @@ func (w *World) checkOut() {
 			team = 0
 		}
 		w.setRestart("throw_in", team, Vec{clamp(b.X, -FieldHalfX+3, FieldHalfX-3), sign(b.Z) * (FieldHalfZ - 4)}) // spot sits inside so the taker can stand outside it
-	case math.Abs(b.X) > FieldHalfX && math.Abs(b.Z) >= GoalHalfWidth-0.2:
+	case math.Abs(b.X) > FieldHalfX && (math.Abs(b.Z) >= GoalHalfWidth-0.2 || w.Ball.Y > CrossbarY):
 		def := 0 // ball crossed the left end line => team 0's goal line
 		if b.X > 0 {
 			def = 1
@@ -430,7 +466,7 @@ func (w *World) stepRestart() {
 	if r == nil {
 		return
 	}
-	w.Ball.Pos, w.Ball.Vel = r.Spot, Vec{}
+	w.Ball = Ball{Pos: r.Spot}
 	if r.Wait -= Dt; r.Wait > 0 {
 		return
 	}
