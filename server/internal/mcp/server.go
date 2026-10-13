@@ -263,6 +263,8 @@ func (s *Server) register() {
 				if err != nil {
 					return nil, &toolErr{Code: "join_failed", Message: err.Error()}
 				}
+				now := time.Now()
+				r.RecordCall(seat.AgentID, room.RoleCommander, "join_room", now, now, false) // starts the commander's turnaround clock
 				dir := "+x (attack the goal at x=+50, defend x=-50)"
 				if seat.Team == 1 {
 					dir = "-x (attack the goal at x=-50, defend x=+50)"
