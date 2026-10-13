@@ -645,7 +645,7 @@ func (r *Room) idleFor() time.Duration {
 func (r *Room) logEvent(e sim.Event) {
 	switch e.Type {
 	case "join", "ready", "brief_updated", "skill_forged", "skill_created", "skill_cast", "skill_result", "projectile_hit",
-		"status", "switch", "goal", "restart", "strike", "final", "shield_block":
+		"status", "impact", "switch", "goal", "restart", "strike", "final", "shield_block":
 		d, _ := json.Marshal(e.Data)
 		log.Printf("[%s t=%d] %s %s", r.Code, e.Tick, e.Type, d)
 	}

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { EffectManager } from './effects'
+import { Fx } from './fx'
 import type { GameEvent, Snapshot, SkillInfo } from '../types'
 
 export const TEAM_COLORS = ['#35e0ff', '#ff4d6d']
@@ -23,6 +24,7 @@ interface PlayerObj {
   ring: THREE.Mesh
   team: number
   controlled: boolean
+  hasted?: boolean
 }
 
 const loader = new GLTFLoader()
@@ -34,6 +36,11 @@ export class Arena {
   private renderer: THREE.WebGLRenderer
   private controls: OrbitControls
   private effects = new EffectManager(this.scene)
+  private fx!: Fx
+  private trailColor = '#ffffff'
+  private trailUntil = 0
+  private ghostClock = 0
+  private slowRings = new Map<string, THREE.Mesh>()
   private players = new Map<string, PlayerObj>()
   private projs = new Map<number, THREE.Mesh>()
   private walls = new Map<number, THREE.Mesh>()
@@ -79,6 +86,7 @@ export class Arena {
     this.shadow.position.y = 0.04
     this.scene.add(this.shadow)
 
+    this.fx = new Fx(this.scene, overlay)
     this.ro = new ResizeObserver(() => this.resize())
     this.ro.observe(canvas.parentElement ?? canvas)
     this.resize()
@@ -204,6 +212,15 @@ export class Arena {
       o.shield.visible = (p.status?.shield ?? 0) > 0
       o.compile.visible = (ag?.compile_left ?? 0) > 0
       o.controlled = !!ag
+      const slowed = (p.status?.slowed ?? 0) > 0
+      let sr = this.slowRings.get(p.id)
+      if (slowed && !sr) {
+        sr = new THREE.Mesh(new THREE.RingGeometry(2.2, 3.1, 32), new THREE.MeshBasicMaterial({ color: '#6c8cff', transparent: true, opacity: 0.7, side: THREE.DoubleSide }))
+        sr.rotation.x = -Math.PI / 2; sr.position.y = 0.08
+        o.root.add(sr); this.slowRings.set(p.id, sr)
+      }
+      if (sr) sr.visible = slowed
+      o.hasted = (p.status?.hasted ?? 0) > 0
       o.ring.visible = !!ag
       if (ag) {
         if (o.nm.textContent !== ag.name) o.nm.textContent = ag.name
@@ -219,11 +236,12 @@ export class Arena {
       pset.add(pr.id)
       let m = this.projs.get(pr.id)
       if (!m) {
-        m = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: TEAM_COLORS[pr.team] }))
+        m = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: this.skillColor(pr.skill, TEAM_COLORS[pr.team]) }))
         this.scene.add(m); this.projs.set(pr.id, m)
       }
       m.scale.setScalar(pr.radius)
       m.position.set(pr.pos.x, 1.2, pr.pos.z)
+      this.fx.dot(pr.pos.x, 1.2, pr.pos.z, this.skillColor(pr.skill, '#aeeaff'), pr.radius * 0.6, 0.5)
     }
     for (const [id, m] of this.projs) if (!pset.has(id)) { this.scene.remove(m); m.geometry.dispose(); this.projs.delete(id) }
 
@@ -264,12 +282,68 @@ export class Arena {
     } else if (e.type === 'kick') {
       const p = this.players.get(d.player)
       if (p?.controlled) this.effects.spawn(null, { origin: { x: p.root.position.x, z: p.root.position.z }, aim: { x: 1, z: 0 }, reach: 3, color: '#ffffff', duration: 0.3 })
+    } else if (e.type === 'impact') {
+      this.onImpact(d)
+    } else if (e.type === 'status') {
+      const p = this.players.get(d.player)
+      if (p) this.onStatus(p, d)
+    } else if (e.type === 'shield_block') {
+      const p = this.players.get(d.player)
+      if (p) {
+        this.fx.ring(p.root.position.x, p.root.position.z, '#7dffb0', 5, 0.5, 1)
+        this.fx.text(p.root.position.x, 1, p.root.position.z, 'Blocked', '#7dffb0')
+      }
     } else if (e.type === 'switch') {
       const p = this.players.get(d.player)
       if (p) this.effects.spawn(null, { origin: { x: p.root.position.x, z: p.root.position.z }, aim: { x: 1, z: 0 }, reach: 5, color: TEAM_COLORS[p.team], duration: 0.6 })
     } else if (e.type === 'projectile_hit') {
-      this.effects.spawn(null, { origin: d.pos, aim: { x: 1, z: 0 }, reach: 4, color: '#aeeaff', duration: 0.5 })
-      this.shake = Math.max(this.shake, 0.3)
+      const c = this.skillColor(d.skill, '#aeeaff')
+      this.fx.burst(d.pos.x, 1.2, d.pos.z, c, 22, 0.8, 12)
+      this.fx.ring(d.pos.x, d.pos.z, c, 6, 0.6)
+      if (d.victim) this.fx.text(d.pos.x, 1, d.pos.z, 'Hit!', c)
+      this.shake = Math.max(this.shake, 0.45)
+    }
+  }
+
+  private skillColor(id: string | undefined, fallback: string) {
+    return (id && this.skills.get(id)?.spec.visual.color) || fallback
+  }
+
+  private onStatus(p: PlayerObj, d: Record<string, any>) {
+    const x = p.root.position.x, z = p.root.position.z
+    const c = this.skillColor(d.skill, '#ffffff')
+    if (d.status === 'freeze') { this.fx.shards(x, z, '#aeeaff'); this.fx.ring(x, z, '#aeeaff', 7, 0.6); this.fx.text(x, 1, z, 'Frozen', '#aeeaff'); this.shake = Math.max(this.shake, 0.3) }
+    else if (d.status === 'slow') { this.fx.ring(x, z, '#6c8cff', 5, 0.8); this.fx.text(x, 1, z, 'Slowed', '#9db4ff') }
+    else if (d.status === 'haste') { this.fx.burst(x, 1, z, c === '#ffffff' ? '#ffe14a' : c, 14, 0.6, 9); this.fx.text(x, 1, z, 'Haste!', '#ffe14a') }
+    else if (d.status === 'shield') { this.fx.ring(x, z, '#7dffb0', 6, 0.6, 1); this.fx.text(x, 1, z, 'Shield', '#7dffb0') }
+  }
+
+  /** What a skill actually did, from the server's impact events. */
+  private onImpact(d: Record<string, any>) {
+    const c = this.skillColor(d.skill, '#ffffff')
+    if (d.kind === 'ball') {
+      const y = this.ball.position.y
+      this.fx.burst(d.pos.x, y, d.pos.z, c, 26, 0.8, 16, d.dir)
+      this.fx.ring(d.pos.x, d.pos.z, c, 7, 0.55)
+      this.fx.text(d.pos.x, y, d.pos.z, d.lift > 0 ? `Lofted +${Math.round(d.lift)}` : `Launched +${Math.round(d.power)}`, c)
+      this.trailColor = c
+      this.trailUntil = performance.now() + 3000
+      this.shake = Math.max(this.shake, 0.5)
+    } else if (d.kind === 'shove') {
+      this.fx.burst(d.pos.x, 1, d.pos.z, c, 16, 0.6, 12, d.dir)
+      this.fx.ring(d.pos.x, d.pos.z, c, 5, 0.5)
+      this.fx.text(d.pos.x, 1, d.pos.z, 'Shoved', c)
+    } else if (d.kind === 'dash') {
+      this.fx.ring(d.pos.x, d.pos.z, c, 4, 0.4)
+      this.ghostClock = 0.6
+    } else if (d.kind === 'magnet') {
+      const p = this.players.get(d.target)
+      if (p) this.fx.field(() => p.root.position, d.radius, c, d.duration)
+      this.fx.text(d.pos.x, 1, d.pos.z, 'Magnet', c)
+    } else if (d.kind === 'wall') {
+      for (const pt of [d.a, d.b]) this.fx.pillar(pt.x, pt.z, c)
+      this.fx.burst(d.pos.x, 1.5, d.pos.z, c, 20, 0.7, 8)
+      this.fx.text(d.pos.x, 2, d.pos.z, 'Wall', c)
     }
   }
 
@@ -317,6 +391,16 @@ export class Arena {
       this.ball.rotateOnWorldAxis(axis, mv.length())
     }
 
+    const bspeed = mv.length() / Math.max(dt, 1e-3)
+    const hot = performance.now() < this.trailUntil
+    if (bspeed > 26 || this.ball.position.y > 3 || (hot && bspeed > 8)) {
+      this.fx.dot(this.ball.position.x, this.ball.position.y, this.ball.position.z, hot ? this.trailColor : '#ffffff', hot ? 0.7 : 0.4, hot ? 0.7 : 0.35)
+    }
+    this.ghostClock = Math.max(0, this.ghostClock - dt)
+    for (const p of this.players.values()) {
+      if (p.hasted || (this.ghostClock > 0 && p.controlled)) this.fx.ghost(p.root.position.x, p.root.position.z, TEAM_COLORS[p.team])
+    }
+    this.fx.update(dt, this.camera, this.canvas.clientWidth, this.canvas.clientHeight)
     const h = Math.max(0, this.ball.position.y - 1)
     this.shadow.position.x = this.ball.position.x
     this.shadow.position.z = this.ball.position.z
@@ -350,6 +434,7 @@ export class Arena {
     cancelAnimationFrame(this.raf)
     this.ro.disconnect()
     this.controls.dispose()
+    this.fx.dispose()
     for (const p of this.players.values()) p.label.remove()
     this.renderer.dispose()
   }

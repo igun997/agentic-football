@@ -102,7 +102,7 @@ func norm(a vec) vec {
 // One template per archetype. The bot recolours them to the trainer's element and clamps the visual
 // to the brief's guardrails, exactly what an LLM agent is expected to do.
 var templates = map[string]map[string]any{
-	"attack": {"name": "Shockwave", "effects": []any{map[string]any{"type": "blast", "radius": 12, "power": 20, "targets": []any{"ball", "enemies"}}},
+	"attack": {"name": "Shockwave", "effects": []any{map[string]any{"type": "blast", "radius": 12, "power": 20, "lift": 12, "targets": []any{"ball", "enemies"}}},
 		"visual": map[string]any{"duration_ms": 900, "code": `
 const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.18, 8, 48), new THREE.MeshBasicMaterial({color: ctx.color, transparent: true}));
 ring.rotation.x = Math.PI / 2; ring.position.y = 0.4; ctx.group.add(ring);

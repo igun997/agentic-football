@@ -164,7 +164,7 @@ func (w *World) updateProjectiles() {
 				hit["victim"] = who(victim)
 			}
 			w.emit("projectile_hit", hit)
-			w.notes = nil
+			w.notes, w.fxSkill = nil, pr.SkillID
 			if caster := w.PlayerByID(pr.Owner); caster != nil {
 				for i := range pr.OnHit {
 					e := pr.OnHit[i]
@@ -196,7 +196,7 @@ func (w *World) updateProjectiles() {
 		}
 	}
 	w.Projs = alive
-	w.notes = nil
+	w.notes, w.fxSkill = nil, ""
 }
 
 type body struct {

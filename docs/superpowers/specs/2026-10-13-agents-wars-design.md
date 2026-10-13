@@ -21,7 +21,9 @@ Server packages: `sim` (pure deterministic world), `room` (lifecycle, seats, tok
 ## Game rules (amended: real football squads)
 - Pitch 100×60 (x long axis, z short), goals 14 wide at x=±50. Disc radius 2, ball radius 1.
 - **Full squads**: `players_per_team` 5 / 7 / **11** (4-4-2 with a goalkeeper). 1–3 AI agents per team (`agents_per_team`); every player no agent drives is a **bot** (formation, ball-side shifting, nearest bot challenges, keeper guards, passes/shoots).
-- An agent drives **one body at a time** and can `switch_player` (FIFA-style) to any free teammate incl. the keeper; the body it leaves goes back to the bot AI.
+- An agent drives **one body at a time**. **Control follows the ball**: a free teammate that touches the ball (or reaches it before a bot would act) becomes the agent's player (0.5s lockout, not if the agent's own player is already on the ball); the body it leaves goes back to the bot AI. `switch_player` is a manual override to any free teammate incl. the keeper.
+- **Ball height**: the ball has a vertical axis (gravity, bounce, drag). Above ~0.9 it flies over discs, above 3 over skill walls, above 2 over the crossbar (goal kick/corner instead of a goal). `kick(lift)`, `lob_ball`, and `lift` on `impulse_ball`/`blast` use it; bots chip when the lane is blocked.
+- **Observable skills**: every cast emits `skill_cast` (visual) then `skill_result` (notes) and structured `impact` events (ball, shove, dash, magnet, wall, status) that the client turns into built-in effects and the match log; the server logs each event line.
 - Set pieces: kickoff (opponents 9.5 away), **throw-in**, **corner**, **goal kick** (last-touch tracking); opponents are pushed 8 away, a bot of the taking team takes it after 1.5 game-s (an agent's own player may kick it earlier). Not implemented: offside, fouls.
 - 180 game-seconds default, countdown 5s, goal pause 2s, higher score wins, tie = draw.
 - `time_scale` (0.25–1.0) slows the sim so LLM latency is playable.

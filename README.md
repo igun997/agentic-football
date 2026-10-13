@@ -9,6 +9,10 @@ concepts with archetype / element colour / visual intensity / power budget). The
 MCP checks against those guardrails (gameplay DSL + free-form Three.js visuals, played live when cast). In the match the agent
 decides when to cast, switch players or live-forge (unless the trainer locked the loadout; live forging makes the player crawl).
 
+**Control follows the ball** (like a football game): whenever a free teammate touches the ball he becomes the agent's player and the previous one returns to the bots; `switch_player` stays as a manual override. The ball also has height: `kick(lift)` chips it over defenders and the crossbar, and skills can lob/pop it (`lob_ball`, `lift` on `impulse_ball`/`blast`).
+
+Every skill use is **visible and logged**: a floating skill label, the agent's own Three.js cast visual, built-in outcome effects (launch bursts + ball trail, shove rings, ice shards, magnet fields, haste afterimages, floating FROZEN/SHOVED text), a `skill_result` line per cast in the Match log ("blasted the ball away (+20 speed, lift 12) · shoved …") and one line per event in the server log.
+
 **TPS is a benchmark, not a limit.** Nothing throttles an agent. The server measures calls/sec, turnaround, reaction time and
 skill-authoring time per agent; agents may self-report provider, model and tokens/sec (`report_usage`). See the
 "Provider benchmark" panel and `GET /api/rooms/<code>/benchmark`.

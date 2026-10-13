@@ -192,6 +192,7 @@ type World struct {
 	notes         []string // what the skill being cast actually did (for the match log)
 	castAgent     *Agent
 	castSkill     *Skill
+	fxSkill       string // id of the skill whose effects are being applied (for impact visuals)
 	rng           *rand.Rand
 }
 
@@ -257,6 +258,12 @@ func who(p *Player) string {
 		return fmt.Sprintf("%s's #%d %s", p.Agent.Name, p.Num, p.Role)
 	}
 	return fmt.Sprintf("t%d #%d %s", p.Team, p.Num, p.Role)
+}
+
+// impact publishes a structured, visualisable consequence of a skill (ball launched, player shoved, ...).
+func (w *World) impact(kind string, data map[string]any) {
+	data["kind"], data["skill"] = kind, w.fxSkill
+	w.emit("impact", data)
 }
 
 func (w *World) emit(t string, data map[string]any) {
@@ -623,12 +630,12 @@ func (w *World) UseSkill(a *Agent, slot int, aim Vec) *GameError {
 		"player": a.ID, "body": p.ID, "skill": sk.ID, "name": sk.Spec.Name,
 		"origin": p.Pos, "aim": dir, "reach": sk.Reach, "duration_ms": sk.Spec.Visual.DurationMs,
 	})
-	w.notes, w.castAgent, w.castSkill = nil, a, sk
+	w.notes, w.castAgent, w.castSkill, w.fxSkill = nil, a, sk, sk.ID
 	for i := range sk.Spec.Effects {
 		w.applyEffect(p, &sk.Spec.Effects[i], p.Pos, dir, sk.ID)
 	}
 	w.emit("skill_result", map[string]any{"player": a.ID, "skill": sk.ID, "name": sk.Spec.Name, "notes": append([]string{}, w.notes...)})
-	w.notes, w.castAgent, w.castSkill = nil, nil, nil
+	w.notes, w.castAgent, w.castSkill, w.fxSkill = nil, nil, nil, ""
 	return nil
 }
 
@@ -662,7 +669,7 @@ func (w *World) applyStatus(target *Player, caster *Player, status string, dur f
 	case "shield":
 		target.Shield = math.Max(target.Shield, dur)
 	}
-	w.emit("status", map[string]any{"player": target.ID, "status": status, "duration": dur})
+	w.emit("status", map[string]any{"player": target.ID, "status": status, "duration": dur, "by": caster.ID, "skill": w.fxSkill})
 }
 
 func (w *World) blast(p *Player, e *Effect, center Vec) {
@@ -679,6 +686,7 @@ func (w *World) blast(p *Player, e *Effect, center Vec) {
 				w.Ball.VY += e.Lift
 				w.touch(p.Team)
 				w.note("blasted the ball away (+%.0f speed%s)", e.Power, liftNote(e.Lift))
+				w.impact("ball", map[string]any{"pos": w.Ball.Pos, "power": e.Power, "lift": e.Lift, "dir": dir})
 			}
 		case "enemies", "allies":
 			for _, o := range w.Players {
@@ -693,6 +701,7 @@ func (w *World) blast(p *Player, e *Effect, center Vec) {
 					}
 					o.Vel = o.Vel.Add(d.Norm().Scale(e.Power))
 					w.note("shoved %s", who(o))
+					w.impact("shove", map[string]any{"target": o.ID, "pos": o.Pos, "power": e.Power, "dir": d.Norm()})
 				}
 			}
 		}
@@ -708,6 +717,7 @@ func (w *World) applyEffect(p *Player, e *Effect, origin, aim Vec, skillID strin
 		}
 		p.Vel = p.Vel.Add(d.Scale(e.Power))
 		w.note("dashed (+%.0f speed)", e.Power)
+		w.impact("dash", map[string]any{"target": p.ID, "pos": p.Pos, "power": e.Power, "dir": d})
 	case "impulse_ball":
 		if w.Ball.Pos.Sub(p.Pos).Len() <= e.Radius+PlayerRadius+BallRadius {
 			d := aim
@@ -721,6 +731,7 @@ func (w *World) applyEffect(p *Player, e *Effect, origin, aim Vec, skillID strin
 			w.Ball.VY = e.Lift
 			w.touch(p.Team)
 			w.note("launched the ball (%.0f speed%s)", e.Power, liftNote(e.Lift))
+			w.impact("ball", map[string]any{"pos": w.Ball.Pos, "power": e.Power, "lift": e.Lift, "dir": d})
 		} else {
 			w.note("ball was out of reach")
 		}
@@ -730,6 +741,7 @@ func (w *World) applyEffect(p *Player, e *Effect, origin, aim Vec, skillID strin
 			w.Ball.VY = e.Lift
 			w.touch(p.Team)
 			w.note("lobbed the ball (%.0f speed, lift %.0f)", e.Power, e.Lift)
+			w.impact("ball", map[string]any{"pos": w.Ball.Pos, "power": e.Power, "lift": e.Lift, "dir": aim})
 		} else {
 			w.note("ball was out of reach for the lob")
 		}
@@ -755,12 +767,14 @@ func (w *World) applyEffect(p *Player, e *Effect, origin, aim Vec, skillID strin
 	case "magnet":
 		w.Magnets = append(w.Magnets, &Magnet{Owner: p.ID, Radius: e.Radius, Strength: e.Strength, Left: e.Duration})
 		w.note("magnet pulls the ball for %.1fs", e.Duration)
+		w.impact("magnet", map[string]any{"target": p.ID, "pos": p.Pos, "radius": e.Radius, "duration": e.Duration})
 	case "wall":
 		c := p.Pos.Add(aim.Scale(e.Distance))
 		perp := Vec{-aim.Z, aim.X}.Scale(e.Length / 2)
 		w.nextID++
 		w.Walls = append(w.Walls, &Wall{ID: w.nextID, A: c.Sub(perp), B: c.Add(perp), Left: e.Duration})
 		w.note("raised a wall for %.1fs", e.Duration)
+		w.impact("wall", map[string]any{"pos": c, "a": c.Sub(perp), "b": c.Add(perp), "duration": e.Duration})
 	}
 }
 
