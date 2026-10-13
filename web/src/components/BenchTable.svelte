@@ -2,7 +2,7 @@
   import { TEAM_COLORS } from '../lib/game/arena'
   import type { AgentView } from '../lib/types'
 
-  let { agents, compact = false }: { agents: AgentView[]; compact?: boolean } = $props()
+  let { agents, compact = false, final = false }: { agents: AgentView[]; compact?: boolean; final?: boolean } = $props()
 
   const rows = $derived(
     [...agents]
@@ -12,7 +12,7 @@
   const ms = (v: number) => (v ? (v >= 1000 ? (v / 1000).toFixed(1) + 's' : Math.round(v) + 'ms') : '—')
 </script>
 
-<table class:compact>
+<div class="scroll"><table class:compact>
   <thead>
     <tr><th></th><th>Agent</th><th title="self-reported: output tokens / generation time">TPS tok/s*</th><th title="tool calls per second, measured (rolling 10s)">calls/s</th>
       <th title="gap between a reply and the agent's next call">turn p50</th><th title="observe → action">reaction</th><th title="time to author a skill">forge</th><th>err</th></tr>
@@ -24,7 +24,7 @@
         <td class="rk">{i + 1}</td>
         <td><b>{a.name}</b><small>{b.provider || '—'}{b.model ? ' · ' + b.model : ''}</small></td>
         <td class="big">{b.tokens_per_sec ? b.tokens_per_sec.toFixed(1) : '—'}</td>
-        <td class="big">{b.calls_per_sec.toFixed(1)}<small>avg {b.calls_avg.toFixed(1)}</small></td>
+        <td class="big">{(final ? b.calls_avg : b.calls_per_sec).toFixed(1)}<small>{final ? 'match average' : `avg ${b.calls_avg.toFixed(1)}`}</small></td>
         <td>{ms(b.turn_p50_ms)}<small>p95 {ms(b.turn_p95_ms)}</small></td>
         <td>{ms(b.reaction_p50_ms)}</td>
         <td>{ms(b.author_avg_ms)}</td>
@@ -34,11 +34,12 @@
       <tr><td colspan="8" class="none">no agent has called the MCP yet</td></tr>
     {/each}
   </tbody>
-</table>
+</table></div>
 <p class="foot">* TPS tokens/s is self-reported by the agent (report_usage). calls/s, turn, reaction and forge time are measured by the server. Nothing here limits the agents.</p>
 
 <style>
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .scroll { overflow-x: auto; max-width: 100%; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13px; }
   th { text-align: left; font: 700 10px var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); padding: 4px 8px; border-bottom: 1px solid var(--line); }
   td { padding: 6px 8px; border-bottom: 1px solid #14203a; vertical-align: top; }
   tr[style] td:nth-child(2) { border-left: 3px solid var(--team); }

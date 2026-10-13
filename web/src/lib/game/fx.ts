@@ -113,6 +113,17 @@ export class Fx {
     this.add(m, dur, (k) => { m.scale.set(1 - k * 0.5, 1 + k * 0.4, 1 - k * 0.5); (m.material as THREE.MeshBasicMaterial).opacity = 0.7 * (1 - k) })
   }
 
+  /** A glowing streak between two ground points (pass / launch). */
+  streak(a: { x: number; z: number }, b: { x: number; z: number }, color: string, dur = 0.8, y = 1.2, arc = 0) {
+    const pts: THREE.Vector3[] = []
+    for (let i = 0; i <= 24; i++) {
+      const t = i / 24
+      pts.push(new THREE.Vector3(a.x + (b.x - a.x) * t, y + Math.sin(t * Math.PI) * arc, a.z + (b.z - a.z) * t))
+    }
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color, transparent: true }))
+    this.add(line, dur, (k) => { (line.material as THREE.LineBasicMaterial).opacity = 1 - k })
+  }
+
   /** Floating combat text above a world position. */
   text(x: number, y: number, z: number, text: string, color: string) {
     const el = document.createElement('div')

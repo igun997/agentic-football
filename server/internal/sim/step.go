@@ -92,6 +92,7 @@ func (w *World) updatePlayers() {
 		dec(&p.Hasted)
 		dec(&p.Shield)
 		dec(&p.botRest)
+		dec(&p.launchCD)
 	}
 }
 
@@ -113,6 +114,9 @@ func (p *Player) speedMult() float64 {
 	}
 	if p.Agent == nil || p.auto {
 		m *= BotSpeedFactor
+		if p.Role == RoleGK {
+			m *= 0.55 // keepers are not superhuman: a well-placed shot beats them
+		}
 	}
 	return m
 }
@@ -508,9 +512,9 @@ func (w *World) restartAim(taker *Player, r *Restart) (Vec, float64) {
 	case "goal_kick":
 		return Vec{0, -sign(r.Spot.Z) * 14}.Sub(r.Spot).Norm(), 32
 	}
-	if mate := w.bestPassTarget(taker, r.Spot, true); mate != nil {
-		d := mate.Pos.Sub(r.Spot)
-		return d.Norm(), clamp(6+d.Len()*0.8, 10, 30)
+	if c := w.bestPass(taker, r.Spot, true); c.who != nil {
+		d := c.who.Pos.Sub(r.Spot)
+		return d.Norm(), clamp(6+d.Len()*0.75, 10, 30)
 	}
 	return Vec{atk, 0}, 14
 }

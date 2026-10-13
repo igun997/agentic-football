@@ -41,6 +41,7 @@ export class Arena {
   private trailUntil = 0
   private ghostClock = 0
   private slowRings = new Map<string, THREE.Mesh>()
+  private planMarks = new Map<string, { line: THREE.Line; ring: THREE.Mesh }>()
   private players = new Map<string, PlayerObj>()
   private projs = new Map<number, THREE.Mesh>()
   private walls = new Map<number, THREE.Mesh>()
@@ -259,7 +260,41 @@ export class Arena {
     }
     for (const [id, m] of this.walls) if (!wset.has(id)) { this.scene.remove(m); m.geometry.dispose(); this.walls.delete(id) }
 
+    this.updatePlan(s)
     for (const e of s.events ?? []) this.onEvent(e)
+  }
+
+  /** The agents' plans are drawn on the pitch: a dashed line from each ordered disc to its target spot. */
+  private updatePlan(s: Snapshot) {
+    const live = new Set<string>()
+    for (const p of s.players) {
+      const o = p.order
+      if (!o) continue
+      live.add(p.id)
+      const color = TEAM_COLORS[p.team]
+      let m = this.planMarks.get(p.id)
+      if (!m) {
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+          new THREE.LineDashedMaterial({ color, dashSize: 1.2, gapSize: 0.9, transparent: true, opacity: 0.85 }))
+        const ring = new THREE.Mesh(new THREE.RingGeometry(1.2, 1.6, 28), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, side: THREE.DoubleSide }))
+        ring.rotation.x = -Math.PI / 2
+        this.scene.add(line, ring)
+        m = { line, ring }
+        this.planMarks.set(p.id, m)
+      }
+      const from = new THREE.Vector3(p.pos.x, 0.2, p.pos.z), to = new THREE.Vector3(o.x, 0.2, o.z)
+      m.line.geometry.setFromPoints([from, to])
+      m.line.computeLineDistances()
+      m.ring.position.set(o.x, 0.12, o.z)
+      m.ring.scale.setScalar(o.action === 'hold' ? 0.7 : 1 + 0.12 * Math.sin(performance.now() / 160))
+    }
+    for (const [id, m] of this.planMarks) {
+      if (!live.has(id)) {
+        this.scene.remove(m.line, m.ring)
+        m.line.geometry.dispose(); m.ring.geometry.dispose()
+        this.planMarks.delete(id)
+      }
+    }
   }
 
   private onEvent(e: GameEvent) {
@@ -282,6 +317,20 @@ export class Arena {
     } else if (e.type === 'kick') {
       const p = this.players.get(d.player)
       if (p?.controlled) this.effects.spawn(null, { origin: { x: p.root.position.x, z: p.root.position.z }, aim: { x: 1, z: 0 }, reach: 3, color: '#ffffff', duration: 0.3 })
+    } else if (e.type === 'pass') {
+      const from = this.players.get(d.from)
+      const col = from ? TEAM_COLORS[from.team] : '#ffffff'
+      if (from) this.fx.streak({ x: from.root.position.x, z: from.root.position.z }, d.aim, col, Math.max(0.6, d.eta), 1.2, d.style === 'lob' ? 5 : 0)
+      this.fx.ring(d.aim.x, d.aim.z, col, 4, Math.max(0.6, d.eta), 0.2)
+      this.fx.text(d.aim.x, 0.5, d.aim.z, d.style === 'lob' ? `Lob ${d.eta}s` : `Pass ${d.eta}s`, col)
+    } else if (e.type === 'launch') {
+      const p = this.players.get(d.player)
+      const col = p ? TEAM_COLORS[p.team] : '#ffffff'
+      this.fx.streak(d.from, d.to, col, 0.7, 0.8)
+      this.fx.ring(d.to.x, d.to.z, col, 3, 0.7, 0.2)
+      this.fx.text(d.to.x, 0.5, d.to.z, 'Launch', col)
+    } else if (e.type === 'plan_set') {
+      this.shake = Math.max(this.shake, 0.1)
     } else if (e.type === 'impact') {
       this.onImpact(d)
     } else if (e.type === 'status') {
@@ -435,6 +484,7 @@ export class Arena {
     this.ro.disconnect()
     this.controls.dispose()
     this.fx.dispose()
+    for (const m of this.planMarks.values()) { m.line.geometry.dispose(); m.ring.geometry.dispose() }
     for (const p of this.players.values()) p.label.remove()
     this.renderer.dispose()
   }

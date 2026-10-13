@@ -60,9 +60,11 @@ type obs struct {
 	Ball    vec
 	Mine    string
 	Players []struct {
-		ID   string
-		Team int
-		Pos  vec
+		ID    string
+		Team  int
+		Pos   vec
+		Role  string
+		Agent string
 	}
 }
 
@@ -74,19 +76,23 @@ func parseObs(p map[string]any) *obs {
 		Mine    string `json:"your_player"`
 		BallPos vec    `json:"ball_pos"`
 		Players []struct {
-			ID   string                 `json:"id"`
-			Team int                    `json:"team"`
-			Pos  struct{ X, Z float64 } `json:"pos"`
+			ID    string                 `json:"id"`
+			Team  int                    `json:"team"`
+			Role  string                 `json:"role"`
+			Agent string                 `json:"agent"`
+			Pos   struct{ X, Z float64 } `json:"pos"`
 		} `json:"players"`
 	}
 	_ = json.Unmarshal(b, &raw)
 	o := &obs{Tick: raw.Tick, Phase: raw.Phase, Ball: raw.BallPos, Mine: raw.Mine}
 	for _, p := range raw.Players {
 		o.Players = append(o.Players, struct {
-			ID   string
-			Team int
-			Pos  vec
-		}{p.ID, p.Team, vec{p.Pos.X, p.Pos.Z}})
+			ID    string
+			Team  int
+			Pos   vec
+			Role  string
+			Agent string
+		}{p.ID, p.Team, vec{p.Pos.X, p.Pos.Z}, p.Role, p.Agent})
 	}
 	return o
 }
@@ -247,6 +253,29 @@ func runBot(code, name string, wg *sync.WaitGroup) {
 			}
 			switch {
 			case toBall < 4.6:
+				var mate *struct {
+					ID    string
+					Team  int
+					Pos   vec
+					Role  string
+					Agent string
+				}
+				for i := range o.Players { // an open team-mate ahead of the ball: play the precise pass
+					m := &o.Players[i]
+					if m.Team != team || m.ID == o.Mine || m.Role == "GK" {
+						continue
+					}
+					ahead := (m.Pos.X - o.Ball.X) * ax
+					if d := math.Hypot(m.Pos.X-o.Ball.X, m.Pos.Z-o.Ball.Z); ahead > 6 && d > 8 && d < 30 && (mate == nil || ahead > (mate.Pos.X-o.Ball.X)*ax) {
+						mate = m
+					}
+				}
+				if mate != nil && math.Abs(goal.X-o.Ball.X) > 30 {
+					p, isErr = c.call("pass_to", args(map[string]any{"player_id": mate.ID}))
+					if !isErr {
+						break
+					}
+				}
 				p, isErr = c.call("kick", args(map[string]any{"dir_x": u.X, "dir_z": u.Z, "power": 1}))
 			default:
 				tx, tz := o.Ball.X-u.X*4, o.Ball.Z-u.Z*4+math.Sin(float64(step)*1.7+float64(team)*3)*5 // wander so two bots don't deadlock head-on
@@ -312,6 +341,21 @@ func runBot(code, name string, wg *sync.WaitGroup) {
 				log.Printf("[%s] live-forged Shockwave, compile lag %.1fs", name, num(p["compile_secs"]))
 			} else {
 				log.Printf("[%s] live forge refused: %v", name, p["message"])
+			}
+		}
+		if ph == "playing" && i%2 == 1 {
+			if o := latest.Load(); o != nil { // plan: send the two nearest bot forwards on timed runs into space
+				orders := []any{}
+				for _, m := range o.Players {
+					if m.Team == team && m.Agent == "" && (m.Role == "FWD" || m.Role == "MID") && len(orders) < 3 {
+						side := float64(len(orders)-1) * 11
+						orders = append(orders, map[string]any{"player_id": m.ID, "action": "move", "x": o.Ball.X + ax*14, "z": side, "arrive_s": 2.5, "ttl": 5})
+					}
+				}
+				p, isErr := c.call("set_plan", map[string]any{"token": cmd, "orders": orders, "tactics": map[string]any{"line": "high", "width": "wide", "press": true}})
+				if isErr {
+					log.Printf("[%s] plan rejected: %v", name, p["message"])
+				}
 			}
 		}
 		if ph == "playing" {

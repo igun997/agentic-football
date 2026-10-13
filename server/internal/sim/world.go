@@ -93,6 +93,8 @@ type Player struct {
 	Agent                *Agent
 
 	KickCD, DashCD                 float64
+	launchCD                       float64
+	order                          *Order
 	botRest                        float64 // bots give the ball room after playing it
 	auto                           bool    // bot AI is currently driving this (idle agent or no agent)
 	Frozen, Slowed, Hasted, Shield float64
@@ -184,8 +186,11 @@ type World struct {
 	Restart   *Restart
 
 	PerTeam       int
-	Autopilot     bool // bots cover for agents that stopped commanding
-	AutoControl   bool // football-game control: the free teammate who touches the ball becomes the agent's player
+	Stats         map[string]int // bot decision counters (tuning/diagnostics)
+	Tactics       [2]Tactics     // team-wide settings the agents chose
+	shooting      bool           // bot is taking a shot (tighter aim)
+	Autopilot     bool           // bots cover for agents that stopped commanding
+	AutoControl   bool           // football-game control: the free teammate who touches the ball becomes the agent's player
 	LastTouchTeam int
 	kickoffTeam   int
 	nextID        int
@@ -199,7 +204,7 @@ type World struct {
 // NewWorld creates the match with full squads of perTeam players each (bots until agents join).
 func NewWorld(durationSecs float64, perTeam int) *World {
 	w := &World{Phase: PhaseLobby, Duration: durationSecs, TimeLeft: durationSecs, Winner: -1,
-		PerTeam: perTeam, Autopilot: true, AutoControl: true, LastTouchTeam: -1, rng: rand.New(rand.NewSource(7))}
+		PerTeam: perTeam, Stats: map[string]int{}, Autopilot: true, AutoControl: true, LastTouchTeam: -1, rng: rand.New(rand.NewSource(7))}
 	for team := 0; team < 2; team++ {
 		for i, slot := range formation(perTeam) {
 			home := slot.pos
@@ -472,6 +477,7 @@ func (w *World) autoControl(p *Player) {
 		old.Agent, old.Move = nil, Vec{}
 	}
 	p.Agent, best.Body = best, p
+	p.order = nil // the ball reached him: he is the agent's player now
 	best.autoLock = w.Tick + int(0.5*TickRate)
 	w.emit("switch", map[string]any{"agent": best.ID, "player": p.ID, "role": string(p.Role), "num": p.Num, "reason": "touch"})
 }
@@ -513,6 +519,7 @@ func (w *World) SwitchPlayer(a *Agent, target string) (*Player, *GameError) {
 		a.Body.Agent, a.Body.Move = nil, Vec{}
 	}
 	np.Agent, a.Body = a, np
+	np.order = nil
 	a.SwitchCD = SwitchCool
 	a.LastCmdTick = w.Tick
 	w.emit("switch", map[string]any{"agent": a.ID, "player": np.ID, "role": string(np.Role), "num": np.Num})

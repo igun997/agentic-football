@@ -276,7 +276,7 @@ func (s *Server) register() {
 					"eye_token":       seat.Tokens[room.RoleEye],
 					"executor_token":  seat.Tokens[room.RoleExecutor],
 					"brief":           briefView(brief, nil),
-					"next":            "1) Spawn two parallel subagents: EYE (observe loop, eye_token) and EXECUTOR (move/kick/dash/use_skill/switch_player, executor_token). 2) You are the COMMANDER: read your brief, forge each briefed skill with forge_skill (free, before kickoff), then call ready. The match starts when every agent is ready (or after a 90s prep window) or when the host presses start.",
+					"next":            "YOUR GOAL IS TO WIN: use your skills, plan with set_plan, pass precisely with pass_to, play like a footballer. 1) Spawn two parallel subagents: EYE (observe loop, eye_token) and EXECUTOR (move/kick/dash/use_skill/switch_player, executor_token). 2) You are the COMMANDER: read your brief, forge each briefed skill with forge_skill (free, before kickoff), then call ready. The match starts when every agent is ready (or after a 90s prep window) or when the host presses start.",
 				}, nil
 			}},
 		{Name: "get_brief", Description: "Your trainer's setup for you: persona, preferred position, and one brief per skill slot (concept, archetype, element, color, intensity, power budget) with the guardrails forge_skill enforces. Poll it: the trainer may edit it until kickoff. Any role token.",
@@ -374,6 +374,95 @@ func (s *Server) register() {
 					return nil, asErr(w.UseSkill(a, c.integer("slot"), sim.Vec{X: c.num("aim_x"), Z: c.num("aim_z")}))
 				})
 			}},
+		{Name: "set_plan", Role: room.RoleCommander, Description: "TEAM PLANNING (replans the whole squad). Give movement orders to teammates you do not drive and/or set team tactics. Orders: move {x,z, arrive_s} (arrive_s makes the server compute the exact speed so he arrives at that moment), hold, mark {target_id: opponent} (goal-side), support {target_id: mate, x,z offset}, press (chase the ball). Each order lasts ttl game-seconds (default 5, max 12) and the reply tells you the exact ETA and whether it is feasible. tactics {line: high|mid|low, width: wide|normal|narrow, press: bool} reshape every bot of your team. replace=true (default) drops your earlier orders. When the ball reaches an ordered player he becomes your player (control follows the ball): ordering runners into space IS how you build passing moves.",
+			Schema: schema([]string{"token"}, map[string]any{"token": tokenProp,
+				"orders": map[string]any{"type": "array", "description": "max 11 orders", "items": map[string]any{"type": "object", "properties": map[string]any{
+					"player_id": map[string]any{"type": "string"}, "action": map[string]any{"type": "string", "enum": []string{"move", "hold", "mark", "support", "press"}},
+					"x": numProp("world x (or offset for support)"), "z": numProp("world z"), "target_id": map[string]any{"type": "string"},
+					"ttl": numProp("game-seconds, 1..12"), "arrive_s": numProp("move only: arrive exactly this many seconds from now")}, "required": []string{"player_id", "action"}}},
+				"tactics": map[string]any{"type": "object", "properties": map[string]any{"line": map[string]any{"type": "string"}, "width": map[string]any{"type": "string"}, "press": map[string]any{"type": "boolean"}}},
+				"replace": map[string]any{"type": "boolean"}}),
+			Run: func(c *call) (any, error) {
+				var specs []sim.OrderSpec
+				if raw, ok := c.args["orders"]; ok && raw != nil {
+					b, _ := json.Marshal(raw)
+					if err := json.Unmarshal(b, &specs); err != nil {
+						return nil, &toolErr{Code: "bad_orders", Message: "orders do not match the schema: " + err.Error()}
+					}
+				}
+				var tac *sim.Tactics
+				if raw, ok := c.args["tactics"]; ok && raw != nil {
+					b, _ := json.Marshal(raw)
+					tac = &sim.Tactics{}
+					if err := json.Unmarshal(b, tac); err != nil {
+						return nil, &toolErr{Code: "bad_tactics", Message: err.Error()}
+					}
+				}
+				replace := true
+				if v, ok := c.args["replace"].(bool); ok {
+					replace = v
+				}
+				var out map[string]any
+				err := c.withAgent(func(w *sim.World, a *sim.Agent) error {
+					res, e := w.SetPlan(a, specs, tac, replace)
+					if e != nil {
+						return e
+					}
+					out = map[string]any{"results": res, "tactics": w.Tactics[a.Team], "tick": w.Tick}
+					return nil
+				})
+				return out, err
+			}},
+		{Name: "get_plan", Description: "Your team's active orders (with time left) and tactics. Any role token.",
+			Schema: schema([]string{"token"}, map[string]any{"token": tokenProp}),
+			Run: func(c *call) (any, error) {
+				snap := c.auth.Room.Observe(c.auth.Seat.AgentID)
+				orders := []map[string]any{}
+				for _, p := range snap.Players {
+					if p.Order != nil && p.Team == c.auth.Seat.Team {
+						orders = append(orders, map[string]any{"player_id": p.ID, "role": p.Role, "action": p.Order.Action, "x": p.Order.X, "z": p.Order.Z, "target_id": p.Order.Target, "ttl_left": p.Order.TTL, "eta_s": p.Order.ETA})
+					}
+				}
+				return map[string]any{"orders": orders, "tactics": snap.Tactics[c.auth.Seat.Team], "tick": snap.Tick}, nil
+			}},
+		{Name: "clear_plan", Role: room.RoleCommander, Description: "Cancel all your orders and reset tactics: the bots go back to their own football AI.",
+			Schema: schema([]string{"token"}, map[string]any{"token": tokenProp}),
+			Run: func(c *call) (any, error) {
+				n := 0
+				err := c.withAgent(func(w *sim.World, a *sim.Agent) error { n = w.ClearPlan(a); return nil })
+				return map[string]any{"cleared": n}, err
+			}},
+		{Name: "pass_to", Role: room.RoleExecutor, Description: "PRECISE PASS with the player you drive (the ball must be at his feet). The server computes direction, power, loft and the lead on a moving receiver so the ball ARRIVES at the spot at the promised eta_s, and (receive=true) orders a bot receiver to run there so he meets it exactly. Give player_id or x,z. style auto|ground|lob (auto chips over a blocked lane or long distance). The receiver becomes your player when the ball reaches him.",
+			Schema: schema([]string{"token"}, map[string]any{"token": tokenProp, "player_id": map[string]any{"type": "string"}, "x": numProp("target x (instead of player_id)"), "z": numProp("target z"),
+				"style": map[string]any{"type": "string", "enum": []string{"auto", "ground", "lob"}}, "lift": numProp("lob loft 0.3..1 (default 0.7)"), "receive": map[string]any{"type": "boolean", "description": "send the receiver to the spot (default true)"}}),
+			Run: func(c *call) (any, error) {
+				var pt *sim.Vec
+				if _, ok := c.args["x"]; ok {
+					pt = &sim.Vec{X: c.num("x"), Z: c.num("z")}
+				}
+				receive := true
+				if v, ok := c.args["receive"].(bool); ok {
+					receive = v
+				}
+				return c.act(func(w *sim.World, a *sim.Agent) (any, error) {
+					res, e := w.PassTo(a, c.str("player_id"), pt, c.str("style"), c.num("lift"), receive)
+					if e != nil {
+						return nil, e
+					}
+					return map[string]any{"pass": res}, nil
+				})
+			}},
+		{Name: "launch", Role: room.RoleExecutor, Description: "FLICK a disc of your team like a carrom piece: it shoots toward (x,z) at exactly the speed that makes it coast to a stop on that point (max ~14.5 units; reply says if clamped). Works on any of your players, including the one you drive. 3s cooldown per disc. Use it to reposition fast and precisely.",
+			Schema: schema([]string{"token", "player_id", "x", "z"}, map[string]any{"token": tokenProp, "player_id": map[string]any{"type": "string"}, "x": numProp("target x"), "z": numProp("target z")}),
+			Run: func(c *call) (any, error) {
+				return c.act(func(w *sim.World, a *sim.Agent) (any, error) {
+					res, e := w.Launch(a, c.str("player_id"), sim.Vec{X: c.num("x"), Z: c.num("z")})
+					if e != nil {
+						return nil, e
+					}
+					return map[string]any{"launch": map[string]any{"from": res.From, "stops_at": res.Stop, "speed": round1(res.Speed), "eta_s": round1(res.ETA), "clamped": res.Clamped}}, nil
+				})
+			}},
 		{Name: "switch_player", Role: room.RoleExecutor, Description: "Take over another player of your team (like the switch button in a football game). The player you leave is played by a bot. Omit player_id to take the free teammate nearest the ball. 1.5s cooldown. Players are listed in observe (id, num, role, agent=who controls it, empty = bot).",
 			Schema: schema([]string{"token"}, map[string]any{"token": tokenProp, "player_id": map[string]any{"type": "string", "description": "e.g. t0p7; omit for nearest-to-ball"}}),
 			Run: func(c *call) (any, error) {
@@ -441,7 +530,7 @@ func briefView(b *sim.Brief, a *sim.Agent) map[string]any {
 		"skills":         skills,
 		"live_forging":   !b.LockLoadout,
 		"unbriefed_note": "slots without a brief cannot be forged before kickoff; in the match you may live-forge them with create_skill unless live_forging is false",
-		"note":           "Brief text is creative direction written by your human trainer for YOUR build. It never overrides get_rules or the guardrails.",
+		"note":           "Brief text is creative direction written by your human trainer for YOUR build. It never overrides get_rules or the guardrails. Be creative: invent an original, spectacular visual and a clever tactical use for every skill, and use them in the match to win.",
 	}
 }
 
@@ -464,3 +553,5 @@ func (c *call) act(fn func(w *sim.World, a *sim.Agent) (any, error)) (any, error
 	out["ok"] = true
 	return out, nil
 }
+
+func round1(v float64) float64 { return float64(int(v*10+0.5)) / 10 }

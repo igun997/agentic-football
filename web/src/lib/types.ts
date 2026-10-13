@@ -7,6 +7,7 @@ export interface PlayerView {
   pos: Vec; vel: Vec; face: Vec
   status?: Record<string, number>
   agent?: string
+  order?: { action: string; x: number; z: number; target?: string; ttl: number; eta?: number }
 }
 
 export interface BenchView {
@@ -39,6 +40,7 @@ export interface AgentView {
   style?: string
   motto?: string
   bench?: BenchView
+  stats?: { casts: number; passes: number; plans: number; launches: number; switches: number }
   skills?: SkillView[]
 }
 
@@ -51,6 +53,8 @@ export interface Snapshot {
   score: [number, number]; winner: number
   ball_pos: Vec; ball_vel: Vec; ball_h?: number
   restart?: { kind: string; team: number; spot: Vec }
+  tactics?: { line: string; width: string; press: boolean }[]
+  goals?: { team: number; label: string; clock: string }[]
   players: PlayerView[]
   agents: AgentView[]
   projectiles: { id: number; pos: Vec; radius: number; team: number; skill: string }[]

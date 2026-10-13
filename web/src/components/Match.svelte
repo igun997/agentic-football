@@ -19,6 +19,7 @@
   let error = $state('')
   let copied = $state(false)
   let showBench = $state(false)
+  let endHidden = $state(false)
   let arena: Arena | null = null
   const isHost = $derived(!!hostToken(code))
   let seq = 0
@@ -44,6 +45,9 @@
     switch (e.type) {
       case 'join': return { text: `${d.name} joined team ${d.team === 0 ? 'CYAN' : 'RED'}`, kind: 'info' }
       case 'goal': return { text: `GOAL — ${d.label} scores for ${d.team === 0 ? 'CYAN' : 'RED'}!`, kind: 'goal' }
+      case 'plan_set': return { text: `📋 ${nameOf(d.agent)} set a plan: ${d.orders} order${d.orders === 1 ? '' : 's'} · line ${d.tactics?.line ?? 'mid'}, ${d.tactics?.width ?? 'normal'}${d.tactics?.press ? ', press' : ''}`, kind: 'cast' }
+      case 'pass': return { text: `🎯 ${nameOf(d.agent)} ${d.style} pass${d.to ? ' to ' + d.to : ''} — arrives in ${Number(d.eta).toFixed(1)}s`, kind: 'cast' }
+      case 'launch': return { text: `🚀 ${nameOf(d.agent)} launched ${d.player} → stops at (${Math.round(d.to.x)}, ${Math.round(d.to.z)}) in ${Number(d.eta).toFixed(1)}s`, kind: 'cast' }
       case 'switch': return { text: `${nameOf(d.agent)} switched to #${d.num} ${d.role}`, kind: 'cast' }
       case 'restart': return d.kind === 'kickoff' ? null : { text: `${RESTART[d.kind]} for ${d.team === 0 ? 'CYAN' : 'RED'}`, kind: 'info' }
       case 'skill_created': return { text: `${nameOf(d.player)} live-forged “${d.name}” (power ${d.power}) — lagging while it compiles`, kind: 'forge' }
@@ -167,15 +171,55 @@
 
   {#if banner}<div class="banner display">{banner}</div>{/if}
 
-  {#if snap?.phase === 'finished'}
-    <div class="final">
-      <p class="display">Full time</p>
-      <h2 class="display">{snap.score[0]} – {snap.score[1]}</h2>
-      <p class="display win" style:color={snap.winner >= 0 ? TEAM_COLORS[snap.winner] : 'var(--gold)'}>
-        {snap.winner === -1 ? 'Draw' : `${teamAgents(snap.winner).map((p) => p.name).join(' & ') || (snap.winner === 0 ? 'Cyan bots' : 'Red bots')} win`}</p>
-      <div class="benchfinal"><BenchTable agents={snap.agents} compact /></div>
-      <a href="#/" class="again display">New match</a>
+  {#if snap?.phase === 'finished' && !endHidden}
+    {@const w = snap.winner}
+    <div class="end">
+      <div class="endcard">
+        <p class="ft display">Full time</p>
+        <div class="endscore">
+          <div class="side" style:--team={TEAM_COLORS[0]}>
+            <span class="tn display">Cyan</span>
+            {#each teamAgents(0) as a}<b>{a.name}</b><small>{a.bench?.provider ?? ''}{a.bench?.model ? ' · ' + a.bench.model : ''}</small>{:else}<b>Bots</b>{/each}
+          </div>
+          <div class="nums display"><span style:color={TEAM_COLORS[0]}>{snap.score[0]}</span><i>–</i><span style:color={TEAM_COLORS[1]}>{snap.score[1]}</span></div>
+          <div class="side right" style:--team={TEAM_COLORS[1]}>
+            <span class="tn display">Red</span>
+            {#each teamAgents(1) as a}<b>{a.name}</b><small>{a.bench?.provider ?? ''}{a.bench?.model ? ' · ' + a.bench.model : ''}</small>{:else}<b>Bots</b>{/each}
+          </div>
+        </div>
+        <p class="verdict display" style:color={w >= 0 ? TEAM_COLORS[w] : 'var(--gold)'}>
+          {w === -1 ? 'Draw' : `${teamAgents(w).map((p) => p.name).join(' & ') || (w === 0 ? 'Cyan bots' : 'Red bots')} win`}</p>
+
+        {#if snap.goals?.length}
+          <ul class="goals">{#each snap.goals as g}<li style:border-color={TEAM_COLORS[g.team]}><time>{g.clock}</time>{g.label} <small>{g.team === 0 ? 'Cyan' : 'Red'}</small></li>{/each}</ul>
+        {/if}
+
+        <div class="cards">
+          {#each snap.agents as a}
+            <div class="ac" style:--team={TEAM_COLORS[a.team]}>
+              <h4 class="display">{a.name}</h4>
+              <dl>
+                <div><dt>Skills used</dt><dd>{a.stats?.casts ?? 0}</dd></div>
+                <div><dt>Precise passes</dt><dd>{a.stats?.passes ?? 0}</dd></div>
+                <div><dt>Plans set</dt><dd>{a.stats?.plans ?? 0}</dd></div>
+                <div><dt>Launches</dt><dd>{a.stats?.launches ?? 0}</dd></div>
+                <div><dt>Player switches</dt><dd>{a.stats?.switches ?? 0}</dd></div>
+                <div><dt>Yellow cards</dt><dd>{a.strikes}</dd></div>
+              </dl>
+            </div>
+          {/each}
+        </div>
+
+        <h4 class="display bh">Provider benchmark</h4>
+        <BenchTable agents={snap.agents} compact final />
+        <div class="endbtns">
+          <a href="#/" class="again display">New match</a>
+          <button class="alt display" onclick={() => (endHidden = true)}>View pitch</button>
+        </div>
+      </div>
     </div>
+  {:else if snap?.phase === 'finished'}
+    <button class="reopen display" onclick={() => (endHidden = false)}>Show result {snap.score[0]} – {snap.score[1]}</button>
   {/if}
 
   {#if snap?.phase === 'lobby' && info}
@@ -253,12 +297,27 @@
   .feed li.result { border-color: #c06bff; color: #d9b8ff; }
   .benchbtn { position: absolute; right: 14px; bottom: 14px; background: var(--panel); color: var(--dim); border: 1px solid var(--line); padding: 7px 12px; font-size: 11px; }
   .benchpanel { position: absolute; right: 14px; bottom: 54px; width: min(640px, 94vw); background: #0b1222f2; border: 1px solid var(--line); padding: 12px; }
-  .benchfinal { width: min(620px, 88vw); text-align: left; }
   .final, .invite { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #0b1222ee; border: 1px solid var(--line);
     padding: 28px 36px; text-align: center; backdrop-filter: blur(10px); display: grid; gap: 10px; justify-items: center; max-width: min(560px, 92vw); }
   .invite { position: static; transform: none; padding: 20px 24px; }
   .big { font-size: 52px !important; }
-  .final h2 { font-size: 90px; margin: 0; line-height: 1; } .final p { margin: 0; } .win { font-size: 24px; }
+  .end { position: absolute; inset: 0; background: radial-gradient(ellipse at center, #070b14cc, #070b14f2); overflow: auto; display: grid; place-items: center; padding: 28px 14px; backdrop-filter: blur(6px); }
+  .endcard { width: min(900px, 96vw); background: #0b1222f5; border: 1px solid var(--line); padding: 26px 30px 24px; display: grid; gap: 14px; clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 0 100%); }
+  .ft { margin: 0; text-align: center; color: var(--dim); font-size: 14px; letter-spacing: .4em; }
+  .endscore { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 18px; }
+  .side { display: grid; gap: 2px; border-left: 3px solid var(--team); padding-left: 12px; } .side.right { text-align: right; border-left: 0; border-right: 3px solid var(--team); padding: 0 12px 0 0; }
+  .tn { color: var(--team); font-size: 13px; } .side b { font-size: 20px; } .side small { color: var(--dim); font-size: 11px; }
+  .nums { display: flex; align-items: center; gap: 16px; font-size: clamp(56px, 12vw, 110px); line-height: 1; } .nums i { color: var(--dim); font-style: normal; font-size: .5em; }
+  .verdict { margin: 0; text-align: center; font-size: 26px; letter-spacing: .12em; }
+  .goals { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  .goals li { background: #0a1120; border-left: 3px solid; padding: 4px 10px; font-size: 12px; } .goals time { color: var(--dim); margin-right: 8px; font-variant-numeric: tabular-nums; } .goals small { color: var(--dim); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+  .ac { background: #0a1120; border-top: 3px solid var(--team); padding: 10px 14px; } .ac h4 { margin: 0 0 8px; color: var(--team); font-size: 14px; }
+  .ac dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; } .ac dl div { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+  .ac dt { color: var(--dim); } .ac dd { margin: 0; font: 800 15px var(--display); }
+  .bh { margin: 6px 0 -4px; font-size: 12px; color: var(--dim); }
+  .endbtns { display: flex; gap: 10px; justify-content: center; margin-top: 4px; }
+  .reopen { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); background: var(--gold); color: #1a1300; border: 0; padding: 8px 16px; font-size: 12px; }
   .again, .go, .alt { padding: 12px 22px; text-decoration: none; border: 0; font-size: 15px; }
   .again, .go { background: var(--gold); color: #1a1300; } .go:disabled { opacity: .4; cursor: not-allowed; }
   .alt { background: transparent; color: var(--t0); border: 1px solid var(--t0); }

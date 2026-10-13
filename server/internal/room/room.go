@@ -88,12 +88,29 @@ type Room struct {
 	slots         []*Slot
 	bench         map[string]*Bench
 	prepDeadline  time.Time
+	agentStats    map[string]*AgentStats
+	goals         []GoalView
+}
+
+// AgentStats are running match totals per agent (survive page reloads, shown on the full-time screen).
+type AgentStats struct {
+	Casts    int `json:"casts"`
+	Passes   int `json:"passes"`
+	Plans    int `json:"plans"`
+	Launches int `json:"launches"`
+	Switches int `json:"switches"`
+}
+
+type GoalView struct {
+	Team  int    `json:"team"`
+	Label string `json:"label"`
+	Clock string `json:"clock"`
 }
 
 func newRoom(code string, cfg Config) *Room {
 	r := &Room{
 		Code: code, Cfg: cfg, Created: time.Now(), lastActive: time.Now(), HostToken: token(),
-		world: sim.NewWorld(cfg.DurationSecs, cfg.PlayersPerTeam), subs: map[chan []byte]struct{}{}, bench: map[string]*Bench{},
+		world: sim.NewWorld(cfg.DurationSecs, cfg.PlayersPerTeam), subs: map[chan []byte]struct{}{}, bench: map[string]*Bench{}, agentStats: map[string]*AgentStats{},
 	}
 	for team := 0; team < 2; team++ {
 		for i := 0; i < cfg.AgentsPerTeam; i++ {
@@ -404,6 +421,17 @@ type PlayerView struct {
 	Face   sim.Vec            `json:"face"`
 	Status map[string]float64 `json:"status,omitempty"`
 	Agent  string             `json:"agent,omitempty"` // controlling agent id; empty = bot
+	Order  *OrderView         `json:"order,omitempty"`
+}
+
+// OrderView is a movement order from an agent's plan (spectators see all, agents see their own team's).
+type OrderView struct {
+	Action string  `json:"action"`
+	X      float64 `json:"x"`
+	Z      float64 `json:"z"`
+	Target string  `json:"target,omitempty"`
+	TTL    float64 `json:"ttl"`
+	ETA    float64 `json:"eta,omitempty"`
 }
 
 type AgentView struct {
@@ -415,6 +443,7 @@ type AgentView struct {
 	Style       string      `json:"style,omitempty"`
 	Motto       string      `json:"motto,omitempty"`
 	Bench       *BenchView  `json:"bench,omitempty"`
+	Stats       *AgentStats `json:"stats,omitempty"`
 	Strikes     int         `json:"strikes"`
 	Message     string      `json:"message,omitempty"`
 	CompileLeft float64     `json:"compile_left,omitempty"`
@@ -445,26 +474,28 @@ type RestartView struct {
 }
 
 type Snapshot struct {
-	Room          string       `json:"room"`
-	Tick          int          `json:"tick"`
-	Phase         sim.Phase    `json:"phase"`
-	PhaseLeft     float64      `json:"phase_left"`
-	TimeLeft      float64      `json:"time_left"`
-	Score         [2]int       `json:"score"`
-	Winner        int          `json:"winner"`
-	BallPos       sim.Vec      `json:"ball_pos"`
-	BallVel       sim.Vec      `json:"ball_vel"`
-	BallH         float64      `json:"ball_h"` // height of the ball centre above the ground (1 = rolling)
-	Restart       *RestartView `json:"restart,omitempty"`
-	Players       []PlayerView `json:"players"`
-	Agents        []AgentView  `json:"agents"`
-	Projectiles   []ProjView   `json:"projectiles"`
-	Walls         []WallView   `json:"walls"`
-	Events        []sim.Event  `json:"events,omitempty"`
-	SkillsVersion int          `json:"skills_version"`
-	You           string       `json:"you,omitempty"`         // your agent id (observe only)
-	YourPlayer    string       `json:"your_player,omitempty"` // the body you control now
-	AttackDir     string       `json:"attack_direction,omitempty"`
+	Room          string         `json:"room"`
+	Tick          int            `json:"tick"`
+	Phase         sim.Phase      `json:"phase"`
+	PhaseLeft     float64        `json:"phase_left"`
+	TimeLeft      float64        `json:"time_left"`
+	Score         [2]int         `json:"score"`
+	Winner        int            `json:"winner"`
+	BallPos       sim.Vec        `json:"ball_pos"`
+	BallVel       sim.Vec        `json:"ball_vel"`
+	BallH         float64        `json:"ball_h"` // height of the ball centre above the ground (1 = rolling)
+	Restart       *RestartView   `json:"restart,omitempty"`
+	Tactics       [2]sim.Tactics `json:"tactics"`
+	Goals         []GoalView     `json:"goals"`
+	Players       []PlayerView   `json:"players"`
+	Agents        []AgentView    `json:"agents"`
+	Projectiles   []ProjView     `json:"projectiles"`
+	Walls         []WallView     `json:"walls"`
+	Events        []sim.Event    `json:"events,omitempty"`
+	SkillsVersion int            `json:"skills_version"`
+	You           string         `json:"you,omitempty"`         // your agent id (observe only)
+	YourPlayer    string         `json:"your_player,omitempty"` // the body you control now
+	AttackDir     string         `json:"attack_direction,omitempty"`
 }
 
 func (r *Room) snapshotLocked(w *sim.World, viewer string, withEvents bool) Snapshot {
@@ -474,6 +505,12 @@ func (r *Room) snapshotLocked(w *sim.World, viewer string, withEvents bool) Snap
 		SkillsVersion: r.skillsVersion, You: viewer,
 		Players: []PlayerView{}, Agents: []AgentView{}, Projectiles: []ProjView{}, Walls: []WallView{},
 	}
+	viewerTeam := -1
+	if va := w.AgentByID(viewer); va != nil {
+		viewerTeam = va.Team
+	}
+	s.Tactics = w.Tactics
+	s.Goals = append([]GoalView{}, r.goals...)
 	if rs := w.Restart; rs != nil {
 		s.Restart = &RestartView{Kind: rs.Kind, Team: rs.Team, Spot: rs.Spot}
 	}
@@ -481,6 +518,15 @@ func (r *Room) snapshotLocked(w *sim.World, viewer string, withEvents bool) Snap
 		pv := PlayerView{ID: p.ID, Num: p.Num, Team: p.Team, Role: p.Role, Pos: p.Pos, Vel: p.Vel, Face: p.Face}
 		if p.Agent != nil {
 			pv.Agent = p.Agent.ID
+		}
+		if o := p.ActiveOrder(w.Tick); o != nil && (viewer == "" || viewerTeam == p.Team) {
+			ov := &OrderView{Action: o.Action, Target: o.TargetID, TTL: round1f(o.TTL), ETA: round1f(o.ETA), X: o.Target.X, Z: o.Target.Z}
+			if o.Action == "mark" || o.Action == "support" {
+				if tp := w.PlayerByID(o.TargetID); tp != nil {
+					ov.X, ov.Z = tp.Pos.X+o.Offset.X, tp.Pos.Z+o.Offset.Z
+				}
+			}
+			pv.Order = ov
 		}
 		st := map[string]float64{}
 		for k, v := range map[string]float64{"frozen": p.Frozen, "slowed": p.Slowed, "hasted": p.Hasted, "shield": p.Shield} {
@@ -509,6 +555,10 @@ func (r *Room) snapshotLocked(w *sim.World, viewer string, withEvents bool) Snap
 		av.Ready = a.Ready
 		if a.Brief != nil {
 			av.Style, av.Motto = a.Brief.Persona.Style, a.Brief.Persona.Motto
+		}
+		if st := r.agentStats[a.ID]; st != nil {
+			c := *st
+			av.Stats = &c
 		}
 		if bn := r.bench[a.ID]; bn != nil && (viewer == "" || viewer == a.ID) {
 			v := bn.view(time.Now())
@@ -542,6 +592,7 @@ func (r *Room) broadcastLocked() {
 	events := r.world.DrainEvents()
 	for _, e := range events {
 		r.logEvent(e)
+		r.countEvent(e)
 		if e.Type == "skill_created" || e.Type == "skill_forged" {
 			r.skillsVersion++
 		}
@@ -645,8 +696,52 @@ func (r *Room) idleFor() time.Duration {
 func (r *Room) logEvent(e sim.Event) {
 	switch e.Type {
 	case "join", "ready", "brief_updated", "skill_forged", "skill_created", "skill_cast", "skill_result", "projectile_hit",
-		"status", "impact", "switch", "goal", "restart", "strike", "final", "shield_block":
+		"status", "impact", "plan_set", "pass", "launch", "switch", "goal", "restart", "strike", "final", "shield_block":
 		d, _ := json.Marshal(e.Data)
 		log.Printf("[%s t=%d] %s %s", r.Code, e.Tick, e.Type, d)
+	}
+}
+
+func round1f(v float64) float64 { return float64(int(v*10+0.5)) / 10 }
+
+func (r *Room) countEvent(e sim.Event) {
+	agent := func(k string) *AgentStats {
+		id, _ := e.Data[k].(string)
+		if id == "" {
+			return nil
+		}
+		st := r.agentStats[id]
+		if st == nil {
+			st = &AgentStats{}
+			r.agentStats[id] = st
+		}
+		return st
+	}
+	switch e.Type {
+	case "skill_cast":
+		if st := agent("player"); st != nil {
+			st.Casts++
+		}
+	case "pass":
+		if st := agent("agent"); st != nil {
+			st.Passes++
+		}
+	case "plan_set":
+		if st := agent("agent"); st != nil {
+			st.Plans++
+		}
+	case "launch":
+		if st := agent("agent"); st != nil {
+			st.Launches++
+		}
+	case "switch":
+		if st := agent("agent"); st != nil {
+			st.Switches++
+		}
+	case "goal":
+		team, _ := e.Data["team"].(int)
+		label, _ := e.Data["label"].(string)
+		left := r.world.TimeLeft
+		r.goals = append(r.goals, GoalView{Team: team, Label: label, Clock: fmt.Sprintf("%d:%02d", int(left)/60, int(left)%60)})
 	}
 }

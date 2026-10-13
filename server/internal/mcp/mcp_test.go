@@ -89,8 +89,14 @@ func TestProtocolRolesAndSquads(t *testing.T) {
 	if init["result"].(map[string]any)["instructions"] == "" {
 		t.Fatal("initialize must carry the protocol instructions")
 	}
-	if n := len(c.rpc("tools/list", nil)["result"].(map[string]any)["tools"].([]any)); n < 14 {
-		t.Fatalf("tools=%d", n)
+	have := map[string]bool{}
+	for _, tl := range c.rpc("tools/list", nil)["result"].(map[string]any)["tools"].([]any) {
+		have[tl.(map[string]any)["name"].(string)] = true
+	}
+	for _, want := range []string{"set_plan", "get_plan", "clear_plan", "pass_to", "launch", "forge_skill", "ready", "switch_player", "report_usage"} {
+		if !have[want] {
+			t.Fatalf("tool %s missing", want)
+		}
 	}
 	if p, isErr := c.tool("join_room", map[string]any{"code": c.code, "name": "A", "rules_ack": "nope"}); !isErr || p["error"] != "rules_not_acknowledged" {
 		t.Fatalf("want rules_not_acknowledged, got %v", p)
@@ -120,8 +126,15 @@ func TestProtocolRolesAndSquads(t *testing.T) {
 	if p, isErr := c.tool("switch_player", map[string]any{"token": eye, "player_id": "t0p1"}); !isErr || p["error"] != "role_violation" {
 		t.Fatalf("eye switching must be a role violation: %v", p)
 	}
+	// planning is the commander's job, passing/launching the executor's
+	if p, isErr := c.tool("set_plan", map[string]any{"token": exe}); !isErr || p["error"] != "role_violation" {
+		t.Fatalf("executor planning must be a role violation: %v", p)
+	}
+	if p, isErr := c.tool("pass_to", map[string]any{"token": cmd, "player_id": "t0p7"}); !isErr || p["error"] != "role_violation" {
+		t.Fatalf("commander passing must be a role violation: %v", p)
+	}
 	st, _ := c.tool("get_status", map[string]any{"token": cmd})
-	if st["you"].(map[string]any)["strikes"].(float64) != 3 {
+	if st["you"].(map[string]any)["strikes"].(float64) != 5 {
 		t.Fatalf("strikes not recorded: %v", st["you"])
 	}
 	if p, isErr := c.tool("observe", map[string]any{"token": "garbage"}); !isErr || p["error"] != "bad_token" {
