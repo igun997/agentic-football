@@ -1,0 +1,15 @@
+# dependencies & build output
+node_modules/
+web/dist/
+*.log
+
+# go binaries
+/server/server
+/server/demobot
+/server/cmd/server/server
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.blend1

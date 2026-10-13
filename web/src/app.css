@@ -1,0 +1,15 @@
+:root {
+  --bg: #070b14; --panel: #0e1626cc; --line: #1d2a44; --text: #e8f0ff; --dim: #7f93b8;
+  --t0: #35e0ff; --t1: #ff4d6d; --gold: #ffd23f; --ok: #7dffb0;
+  --display: 'Arial Narrow', 'Roboto Condensed', 'Liberation Sans Narrow', ui-sans-serif, system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, sans-serif; }
+button { font: inherit; cursor: pointer; }
+.display { font-family: var(--display); text-transform: uppercase; letter-spacing: .08em; font-weight: 800; }
+
+/* floating nameplates created by the Three.js arena */
+.tag { position: absolute; left: 0; top: 0; pointer-events: none; font: 700 12px var(--display); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text); padding: 2px 8px; background: #0b1222cc; border-bottom: 2px solid var(--team); white-space: nowrap; will-change: transform; }
+.tag .bubble { position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%); background: #fff; color: #0b1222; padding: 4px 9px; border-radius: 10px;
+  font: 600 12px ui-sans-serif, system-ui; text-transform: none; letter-spacing: 0; transition: opacity .25s; opacity: 0; max-width: 220px; white-space: normal; width: max-content; }
